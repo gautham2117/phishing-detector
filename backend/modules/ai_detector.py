@@ -107,7 +107,7 @@ def extract_text_from_file(file_bytes: bytes, filename: str) -> str:
     if fn.endswith(".pdf"):
         try:
             import io
-            from pdfminer.high_level import extract_text
+            from pdfminer.high_level import extract_text # pyright: ignore[reportMissingImports]
             return extract_text(io.BytesIO(file_bytes))
         except Exception:
             return ""
