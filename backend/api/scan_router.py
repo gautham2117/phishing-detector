@@ -11,7 +11,8 @@ import logging
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
+# FIXED — Request added
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel as PydanticBase
 
@@ -50,6 +51,12 @@ from backend.modules.model_manager import (
     add_feedback_label, get_feedback_queue,
     get_model_versions, get_training_state,
     trigger_retrain, get_huggingface_finetune_plan,
+)
+from backend.modules.alert_engine import (
+    create_alert, get_alerts, get_alert_detail,
+    acknowledge_alert, dismiss_alert,
+    export_alerts_csv, export_alert_pdf,
+    get_audit_log, get_alert_stats,
 )
 
 
@@ -2107,6 +2114,274 @@ async def retrain_model():
         return result
     except Exception as e:
         logger.error(f"Retrain trigger error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+    
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 13 — Alerting & Audit System
+# ─────────────────────────────────────────────────────────────────────────────
+
+from fastapi import Request as FastAPIRequest
+from fastapi.responses import StreamingResponse
+import io as _io
+
+class CreateAlertRequest(PydanticBase):
+    module:             str
+    input_type:         str
+    scan_id:            Optional[int]   = None
+    risk_score:         float           = 0.0
+    verdict:            str             = "SUSPICIOUS"
+    recommended_action: str             = "WARN"
+    triggered_rules:    Optional[list]  = []
+    ml_verdicts:        Optional[dict]  = {}
+    raw_findings:       Optional[dict]  = {}
+    actor:              Optional[str]   = "admin"
+
+
+class AcknowledgeRequest(PydanticBase):
+    actor: Optional[str] = "admin"
+
+
+class DismissRequest(PydanticBase):
+    reason: Optional[str] = ""
+    actor:  Optional[str] = "admin"
+
+
+@router.post(
+    "/alerts",
+    summary="Manually create an alert",
+    tags=["Alerts"]
+)
+async def api_create_alert(req: CreateAlertRequest):
+    try:
+        alert_id = create_alert(
+            module             = req.module,
+            input_type         = req.input_type,
+            scan_id            = req.scan_id,
+            risk_score         = req.risk_score,
+            verdict            = req.verdict,
+            recommended_action = req.recommended_action,
+            triggered_rules    = req.triggered_rules or [],
+            ml_verdicts        = req.ml_verdicts    or {},
+            raw_findings       = req.raw_findings   or {},
+            actor              = req.actor or "admin",
+        )
+        if alert_id is None:
+            return JSONResponse(
+                status_code=422,
+                content=error_response(
+                    "Alert not created — verdict/score below threshold."
+                )
+            )
+        return {"status": "success", "alert_id": alert_id}
+    except Exception as e:
+        logger.error(f"Create alert error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/alerts",
+    summary="List alerts with optional filters",
+    tags=["Alerts"]
+)
+async def api_list_alerts(
+    severity:  Optional[str] = None,
+    module:    Optional[str] = None,
+    status:    Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to:   Optional[str] = None,
+    limit:     int           = 100,
+):
+    try:
+        alerts = get_alerts(
+            severity=severity, module=module, status=status,
+            date_from=date_from, date_to=date_to, limit=limit,
+        )
+        return {
+            "status": "success",
+            "alerts": alerts,
+            "total":  len(alerts),
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/alerts/stats",
+    summary="Alert statistics by severity and status",
+    tags=["Alerts"]
+)
+async def api_alert_stats():
+    try:
+        return {"status": "success", "stats": get_alert_stats()}
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/alerts/export/csv",
+    summary="Export all alerts as CSV",
+    tags=["Alerts"]
+)
+async def api_export_csv(
+    severity:  Optional[str] = None,
+    module:    Optional[str] = None,
+    status:    Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to:   Optional[str] = None,
+):
+    try:
+        csv_bytes = export_alerts_csv(
+            severity=severity, module=module, status=status,
+            date_from=date_from, date_to=date_to,
+        )
+        filename = (
+            f"phishguard_alerts_"
+            f"{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+        return StreamingResponse(
+            _io.BytesIO(csv_bytes),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            },
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/alerts/{alert_id}",
+    summary="Get full detail of one alert",
+    tags=["Alerts"]
+)
+async def api_get_alert(alert_id: int):
+    try:
+        alert = get_alert_detail(alert_id)
+        if alert is None:
+            raise HTTPException(status_code=404, detail="Alert not found.")
+        return {"status": "success", "alert": alert}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/alerts/{alert_id}/export/pdf",
+    summary="Export one alert as PDF report",
+    tags=["Alerts"]
+)
+async def api_export_pdf(alert_id: int):
+    try:
+        pdf_bytes = export_alert_pdf(alert_id)
+        if not pdf_bytes:
+            raise HTTPException(
+                status_code=404,
+                detail="Alert not found or PDF generation failed."
+            )
+        # Detect if fallback HTML was returned
+        is_html = pdf_bytes.startswith(b"<!DOCTYPE")
+        if is_html:
+            return StreamingResponse(
+                _io.BytesIO(pdf_bytes),
+                media_type="text/html",
+                headers={
+                    "Content-Disposition":
+                        f"attachment; filename=alert_{alert_id}.html"
+                },
+            )
+        return StreamingResponse(
+            _io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition":
+                    f"attachment; filename=alert_{alert_id}_report.pdf"
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.post(
+    "/alerts/{alert_id}/acknowledge",
+    summary="Acknowledge an open alert",
+    tags=["Alerts"]
+)
+async def api_acknowledge_alert(alert_id: int, req: AcknowledgeRequest):
+    try:
+        result = acknowledge_alert(alert_id, actor=req.actor or "admin")
+        if "error" in result:
+            return JSONResponse(
+                status_code=400,
+                content=error_response(result["error"])
+            )
+        return result
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.post(
+    "/alerts/{alert_id}/dismiss",
+    summary="Dismiss an alert",
+    tags=["Alerts"]
+)
+async def api_dismiss_alert(alert_id: int, req: DismissRequest):
+    try:
+        result = dismiss_alert(
+            alert_id,
+            reason = req.reason or "",
+            actor  = req.actor  or "admin",
+        )
+        if "error" in result:
+            return JSONResponse(
+                status_code=400,
+                content=error_response(result["error"])
+            )
+        return result
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/audit/log",
+    summary="Get immutable audit trail",
+    tags=["Alerts"]
+)
+async def api_audit_log(limit: int = 100):
+    try:
+        logs = get_audit_log(limit=limit)
+        return {"status": "success", "logs": logs, "total": len(logs)}
+    except Exception as e:
         return JSONResponse(
             status_code=500,
             content=error_response(str(e))

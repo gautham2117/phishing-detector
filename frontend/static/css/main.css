@@ -1819,3 +1819,120 @@ select {
     border: 1px solid rgba(56,139,253,.2);
     font-size: .83rem; color: var(--text-muted); line-height: 1.6;
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   PHASE 13 — Alerts & Audit Styles
+   Append to bottom of main.css
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Stats row ───────────────────────────────────────────────────────────── */
+.al-stats-row           {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 12px; margin-bottom: 20px;
+}
+@media (max-width: 900px) {
+    .al-stats-row       { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 480px) {
+    .al-stats-row       { grid-template-columns: repeat(2, 1fr); }
+}
+
+.al-stat-card           {
+    display: flex; flex-direction: column;
+    align-items: center; gap: 4px;
+    padding: 16px 10px; text-align: center;
+}
+.al-stat-icon           { font-size: 1.4rem; }
+.al-stat-val            {
+    font-size: 1.8rem; font-weight: 700; color: var(--text);
+    line-height: 1;
+}
+.al-stat-lbl            { font-size: .74rem; color: var(--text-muted); }
+.al-stat-open .al-stat-val     { color: var(--red);   }
+.al-stat-critical .al-stat-val { color: var(--red);   }
+.al-stat-high .al-stat-val     { color: var(--amber); }
+.al-stat-medium .al-stat-val   { color: var(--blue);  }
+.al-stat-low .al-stat-val      { color: var(--green); }
+
+/* ── Filter card ─────────────────────────────────────────────────────────── */
+.al-filter-card         { margin-bottom: 20px; }
+.al-filter-row          {
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
+}
+.al-export-btns         { margin-left: auto; display: flex; gap: 8px; }
+.al-csv-btn             { border-color: var(--green); color: var(--green); }
+.al-csv-btn:hover       { background: rgba(63,185,80,.1); }
+
+/* ── Alert feed ──────────────────────────────────────────────────────────── */
+.al-feed-body           {
+    display: flex; flex-direction: column; gap: 12px;
+    padding: 16px;
+}
+
+.al-card                {
+    border-left: 4px solid var(--border);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    border-left-width: 4px;
+    padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 8px;
+    transition: box-shadow .2s;
+}
+.al-card:hover          { box-shadow: 0 0 0 1px var(--border); }
+
+.al-card-header         {
+    display: flex; align-items: center;
+    flex-wrap: wrap; gap: 10px;
+}
+.al-sev-badge           {
+    font-weight: 700; font-size: .85rem;
+    white-space: nowrap;
+}
+.al-module-tag          {
+    font-size: .8rem; color: var(--text-muted);
+    background: var(--bg3); padding: 2px 8px;
+    border-radius: 10px; border: 1px solid var(--border);
+}
+.al-risk-score          {
+    font-weight: 700; font-size: .85rem;
+}
+.al-ts                  {
+    margin-left: auto; font-size: .76rem;
+    color: var(--text-muted); white-space: nowrap;
+}
+
+.al-card-summary        {
+    font-size: .87rem; color: var(--text);
+    line-height: 1.55; padding: 8px 12px;
+    background: var(--bg3); border-radius: 6px;
+    border: 1px solid var(--border);
+}
+
+.al-card-meta           {
+    display: flex; flex-wrap: wrap; gap: 16px;
+    font-size: .78rem; color: var(--text-muted);
+}
+
+.al-card-actions        {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    padding-top: 4px; border-top: 1px solid var(--border);
+}
+
+/* ── Audit log ───────────────────────────────────────────────────────────── */
+.al-immutable-badge     {
+    margin-left: auto; font-size: .74rem; font-weight: 600;
+    color: var(--green); border: 1px solid var(--green);
+    border-radius: 10px; padding: 2px 10px;
+    background: rgba(63,185,80,.08);
+}
+.al-action-code         {
+    font-family: monospace; font-size: .78rem;
+    color: var(--blue); background: var(--bg3);
+    padding: 1px 6px; border-radius: 4px;
+}
+.al-detail-cell         {
+    max-width: 220px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+    font-size: .78rem; color: var(--text-muted);
+}

@@ -165,27 +165,52 @@ class AttachmentScan(db.Model):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Alert(db.Model):
-    """
-    One alert generated for every SUSPICIOUS or MALICIOUS detection.
-    Contains the full breakdown of which modules contributed to the verdict
-    and the BART-generated plain-language threat summary.
-    """
     __tablename__ = "alerts"
 
-    id                 = db.Column(db.Integer, primary_key=True)
-    email_id           = db.Column(db.Integer, db.ForeignKey("email_scans.id"), nullable=True)
+    id                = db.Column(db.Integer,     primary_key=True)
+    # Which module produced this alert
+    module            = db.Column(db.String(50),  default="")
+    input_type        = db.Column(db.String(30),  default="")
+    # Reference to the source scan (generic — stores the scan table row id)
+    scan_id           = db.Column(db.Integer,     nullable=True)
+    # Core fields
+    risk_score        = db.Column(db.Float,       default=0.0)
+    severity          = db.Column(db.String(20),  default="Low")
+    # Low | Medium | High | Critical
+    verdict           = db.Column(db.String(30),  default="SUSPICIOUS")
+    triggered_rules   = db.Column(db.Text,        default="[]")   # JSON list
+    ml_verdicts       = db.Column(db.Text,        default="{}")   # JSON dict
+    recommended_action= db.Column(db.String(30),  default="WARN")
+    threat_summary    = db.Column(db.Text,        default="")     # BART output
+    raw_findings      = db.Column(db.Text,        default="{}")   # JSON dict
+    # Status
+    status            = db.Column(db.String(20),  default="open")
+    # open | acknowledged | dismissed
+    acknowledged_by   = db.Column(db.String(100), default="")
+    acknowledged_at   = db.Column(db.DateTime,    nullable=True)
+    dismiss_reason    = db.Column(db.Text,        default="")
+    # Timestamps
+    created_at        = db.Column(db.DateTime,    default=datetime.utcnow)
 
-    input_type         = db.Column(db.String(20))  # Email / URL / SMS / File / Image
-    risk_score         = db.Column(db.Float)
-    severity           = db.Column(db.String(20))  # Low / Medium / High / Critical
-    triggered_rules    = db.Column(db.Text)        # JSON list of rule names
-    ml_verdicts        = db.Column(db.Text)        # JSON dict: {model_name: result}
-    bart_summary       = db.Column(db.Text)        # BART-generated explanation
-    recommended_action = db.Column(db.String(20))  # ALLOW / WARN / QUARANTINE / BLOCK
-    is_false_positive  = db.Column(db.Boolean, default=False)
-    analyst_label      = db.Column(db.String(20))  # human override
-    created_at         = db.Column(db.DateTime, default=datetime.utcnow)
 
+class AuditLog(db.Model):
+    """
+    Immutable append-only audit trail.
+    Never update or delete rows — only INSERT.
+    """
+    __tablename__ = "audit_logs"
+
+    id         = db.Column(db.Integer,    primary_key=True)
+    action     = db.Column(db.String(80), default="")
+    # e.g. ALERT_CREATED, ALERT_ACKNOWLEDGED, ALERT_DISMISSED,
+    #      SCAN_COMPLETED, FEEDBACK_LABELED, RETRAIN_TRIGGERED
+    actor      = db.Column(db.String(100), default="system")
+    module     = db.Column(db.String(50),  default="")
+    object_id  = db.Column(db.Integer,    nullable=True)
+    # ID of the alert / scan / feedback sample this action relates to
+    detail     = db.Column(db.Text,       default="")  # JSON or plain text
+    ip_address = db.Column(db.String(60), default="")
+    created_at = db.Column(db.DateTime,   default=datetime.utcnow)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 12 — Continuous Learning

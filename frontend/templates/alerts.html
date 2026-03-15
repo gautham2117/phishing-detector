@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Alerts & Audit — PhishGuard{% endblock %}
+
+{% block content %}
+<!-- Data island -->
+<div id="page-data"
+     data-list-url="/alerts/list"
+     data-stats-url="/alerts/stats"
+     data-detail-url="/alerts"
+     data-create-url="/alerts/create"
+     data-ack-url="/alerts"
+     data-dismiss-url="/alerts"
+     data-csv-url="/alerts/export/csv"
+     data-pdf-url="/alerts"
+     data-audit-url="/alerts/audit"
+     style="display:none"></div>
+
+<div class="page-header">
+  <h1 class="page-title">
+    <span class="title-icon">🚨</span>
+    Alerts &amp; Audit Log
+  </h1>
+  <p class="page-subtitle">
+    Auto-generated alerts · BART threat summaries ·
+    Severity badges · PDF &amp; CSV export · Immutable audit trail
+  </p>
+</div>
+
+<!-- ── Stats row ──────────────────────────────────────────────────────────── -->
+<div class="al-stats-row">
+  <div class="card al-stat-card">
+    <div class="al-stat-icon">📋</div>
+    <div class="al-stat-val"  id="alStatTotal">—</div>
+    <div class="al-stat-lbl">Total</div>
+  </div>
+  <div class="card al-stat-card al-stat-open">
+    <div class="al-stat-icon">🔴</div>
+    <div class="al-stat-val"  id="alStatOpen">—</div>
+    <div class="al-stat-lbl">Open</div>
+  </div>
+  <div class="card al-stat-card al-stat-critical">
+    <div class="al-stat-icon">🚨</div>
+    <div class="al-stat-val"  id="alStatCritical">—</div>
+    <div class="al-stat-lbl">Critical</div>
+  </div>
+  <div class="card al-stat-card al-stat-high">
+    <div class="al-stat-icon">⚠</div>
+    <div class="al-stat-val"  id="alStatHigh">—</div>
+    <div class="al-stat-lbl">High</div>
+  </div>
+  <div class="card al-stat-card al-stat-medium">
+    <div class="al-stat-icon">🔶</div>
+    <div class="al-stat-val"  id="alStatMedium">—</div>
+    <div class="al-stat-lbl">Medium</div>
+  </div>
+  <div class="card al-stat-card al-stat-low">
+    <div class="al-stat-icon">🔷</div>
+    <div class="al-stat-val"  id="alStatLow">—</div>
+    <div class="al-stat-lbl">Low</div>
+  </div>
+</div>
+
+<!-- ── Filters + export ───────────────────────────────────────────────────── -->
+<div class="card al-filter-card">
+  <div class="card-header">
+    <span class="card-icon">🔍</span>
+    <span class="card-title">Filter Alerts</span>
+    <div class="al-export-btns">
+      <button class="pm-btn al-csv-btn" id="alCsvBtn">
+        ⬇ Export CSV
+      </button>
+    </div>
+  </div>
+  <div class="card-body al-filter-body">
+    <div class="al-filter-row">
+      <div class="rs-id-field">
+        <label class="form-label">Severity</label>
+        <select id="alFiltSeverity" class="form-input mm-select">
+          <option value="">All</option>
+          <option value="Critical">Critical</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
+        </select>
+      </div>
+      <div class="rs-id-field">
+        <label class="form-label">Module</label>
+        <select id="alFiltModule" class="form-input mm-select">
+          <option value="">All Modules</option>
+          <option value="Email">Email</option>
+          <option value="URL">URL</option>
+          <option value="Network">Network</option>
+          <option value="Attachment">Attachment</option>
+          <option value="AI Detection">AI Detection</option>
+          <option value="Image">Image</option>
+        </select>
+      </div>
+      <div class="rs-id-field">
+        <label class="form-label">Status</label>
+        <select id="alFiltStatus" class="form-input mm-select">
+          <option value="">All</option>
+          <option value="open">Open</option>
+          <option value="acknowledged">Acknowledged</option>
+          <option value="dismissed">Dismissed</option>
+        </select>
+      </div>
+      <div class="rs-id-field">
+        <label class="form-label">From Date</label>
+        <input type="date" id="alFiltFrom" class="form-input">
+      </div>
+      <div class="rs-id-field">
+        <label class="form-label">To Date</label>
+        <input type="date" id="alFiltTo" class="form-input">
+      </div>
+      <div class="rs-id-field" style="justify-content:flex-end">
+        <button class="btn btn-primary" id="alApplyFilter"
+                style="margin-top:auto">Apply</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Alert feed ─────────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-icon">🌊</span>
+    <span class="card-title">Alert Feed</span>
+    <span class="att-count-badge" id="alFeedCount">0</span>
+    <span class="att-poll-indicator">● LIVE</span>
+  </div>
+  <div class="card-body al-feed-body" id="alFeedBody">
+    <p class="att-empty-note" style="padding:20px">
+      Loading alerts…
+    </p>
+  </div>
+</div>
+
+<!-- ── Audit log table ────────────────────────────────────────────────────── -->
+<div class="card" style="margin-top:20px">
+  <div class="card-header">
+    <span class="card-icon">📜</span>
+    <span class="card-title">Audit Trail</span>
+    <span class="al-immutable-badge">🔒 Immutable</span>
+  </div>
+  <div class="card-body" style="padding:0">
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Action</th>
+            <th>Actor</th>
+            <th>Module</th>
+            <th>Object ID</th>
+            <th>Detail</th>
+            <th>Timestamp</th>
+          </tr>
+        </thead>
+        <tbody id="alAuditBody">
+          <tr>
+            <td colspan="7" class="att-empty-row">Loading audit log…</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/alerts.js"></script>
+{% endblock %}
