@@ -32,6 +32,8 @@ from backend.app.models import (
     PortResult, AttachmentScan
 )
 from backend.app.utils.response import build_response, error_response
+from backend.modules.image_detector import analyze_image
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1013,3 +1015,95 @@ def _save_attachment_scan(
         logger.error(f"AttachmentScan DB save error: {e}")
         db.session.rollback()
         return None
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 7 — Image analysis
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post(
+    "/scan/image",
+    summary="Analyze an image for phishing indicators",
+    tags=["Phase 7 — Image Analysis"]
+)
+async def scan_image(
+    file:         UploadFile    = File(...),
+    email_scan_id:Optional[int] = Form(default=None),
+    submitter:    Optional[str] = Form(default="anonymous")
+):
+    """
+    Run the full image phishing detection pipeline:
+      Tesseract OCR → DistilBERT → OpenCV form detection → ViT classifier.
+
+    Accepted formats: PNG, JPG, JPEG, BMP, WEBP, GIF.
+    Max file size: 20 MB.
+    """
+    # Validate file type
+    allowed_extensions = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif"}
+    filename  = file.filename or "image.png"
+    extension = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    if extension not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported file type '{extension}'. "
+                f"Accepted: {', '.join(allowed_extensions)}"
+            )
+        )
+
+    # Read and validate file size
+    image_bytes = await file.read()
+
+    if len(image_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    if len(image_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail="Image too large (max 20 MB)."
+        )
+
+    try:
+        # Run the full image analysis pipeline
+        result = analyze_image(
+            image_bytes=image_bytes,
+            filename=filename
+        )
+
+        # Map verdict to standard label and risk score
+        verdict_map = {
+            "Malicious":  ("MALICIOUS",  result["risk_score"]),
+            "Suspicious": ("SUSPICIOUS", result["risk_score"]),
+            "Clean":      ("SAFE",       result["risk_score"]),
+            "Unknown":    ("SUSPICIOUS", 30.0),
+        }
+        label, risk_score = verdict_map.get(
+            result.get("verdict", "Unknown"),
+            ("SUSPICIOUS", 30.0)
+        )
+
+        return build_response(
+            status="success",
+            risk_score=float(risk_score),
+            label=label,
+            module_results={"image_analysis": result},
+            explanation=result.get("explanation", ""),
+            recommended_action=_label_to_action(label)
+        )
+
+    except Exception as e:
+        logger.error(f"Image scan error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+#temporary
+
+@router.get("/debug/email", tags=["Debug"])
+async def debug_email():
+    """Quick health check — confirms email_parser imports correctly."""
+    try:
+        from backend.modules.email_parser import parse_email
+        return {"status": "ok", "message": "email_parser imported successfully"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

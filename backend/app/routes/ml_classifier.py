@@ -1,6 +1,4 @@
 # ml_classifier.py
-# Flask Blueprint for the ML Classifier dashboard page.
-
 import requests
 import logging
 from flask import (
@@ -18,22 +16,15 @@ def _api():
 
 @ml_bp.route("/ml/classifier", methods=["GET"])
 def ml_classifier_page():
-    """Render the ML Classifier dashboard page."""
     return render_template("ml_classifier.html")
 
 
 @ml_bp.route("/ml/scan", methods=["POST"])
 def ml_scan():
-    """
-    Proxy: run the RF + BERT ensemble on a URL.
-    Called by the ML Classifier page's scan form.
-    """
     data = request.get_json() or {}
     url  = data.get("url", "").strip()
-
     if not url:
         return jsonify({"error": "No URL provided"}), 400
-
     try:
         resp = requests.post(
             f"{_api()}/api/scan/ml/url",
@@ -45,7 +36,6 @@ def ml_scan():
             timeout=60
         )
         return jsonify(resp.json()), resp.status_code
-
     except requests.exceptions.ConnectionError:
         return jsonify({"error": "Cannot connect to FastAPI"}), 503
     except requests.exceptions.Timeout:
@@ -56,13 +46,10 @@ def ml_scan():
 
 @ml_bp.route("/ml/scan/batch", methods=["POST"])
 def ml_scan_batch():
-    """Proxy: run the ensemble on a batch of URLs."""
     data = request.get_json() or {}
     urls = data.get("urls", [])
-
     if not urls:
         return jsonify({"error": "No URLs provided"}), 400
-
     try:
         resp = requests.post(
             f"{_api()}/api/scan/ml/url/batch",
@@ -70,6 +57,5 @@ def ml_scan_batch():
             timeout=120
         )
         return jsonify(resp.json()), resp.status_code
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500

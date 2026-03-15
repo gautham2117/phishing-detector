@@ -1,6 +1,18 @@
 # backend/app/__init__.py
-# Flask application factory — complete version covering Phases 0–6.
-# All blueprint registrations and database setup are here.
+# Flask application factory — complete corrected version.
+#
+# KEY FIX: No url_prefix on ANY blueprint registration.
+#
+# Why? Every route file already defines the FULL path in its decorator.
+# Examples:
+#   email_scan.py  -> @email_scan_bp.route("/email/scan")
+#   url_intel.py   -> @url_intel_bp.route("/url/intel")
+#   network_scan.py-> @network_scan_bp.route("/network/scan")
+#
+# If we also add url_prefix="/email" here, Flask combines them:
+#   /email  +  /email/scan  =  /email/email/scan  ->  404
+#
+# The fix is simple: register every blueprint with NO url_prefix.
 
 import os
 import logging
@@ -41,8 +53,6 @@ def create_app(config_name: str = "default") -> Flask:
     )
 
     # ── Load configuration ─────────────────────────────────────────────────
-    # config.py already calls os.makedirs() on the database/ folder
-    # so the SQLite file can always be created
     app.config.from_object(
         config_map.get(config_name, config_map["default"])
     )
@@ -65,47 +75,56 @@ def create_app(config_name: str = "default") -> Flask:
 
 def _register_blueprints(app: Flask) -> None:
     """
-    Register all Flask blueprints.
+    Register all Flask blueprints with NO url_prefix.
 
-    Phases 1–6 blueprints are imported directly — they must exist.
-    Phases 7–16 blueprints are wrapped in try/except so the app
-    starts cleanly even before those phases are built.
+    Every route file defines its own complete URL path in its decorator,
+    so no prefix is needed or wanted here.
+
+    Phases 1-6: imported directly — these files must exist.
+    Phases 7-16: wrapped in try/except — show placeholder if file missing.
     """
 
-    # ── Phases 0–6: always-present blueprints ─────────────────────────────
-
-    # Overview / home page (Phase 0)
+    # ── Phase 0 — Overview dashboard ──────────────────────────────────────
+    # Routes: /   and   /dashboard/stats
     from backend.app.routes.dashboard import dashboard_bp
     app.register_blueprint(dashboard_bp)
 
-    # Phase 1 — Email Scan
+    # ── Phase 1 — Email Scan ───────────────────────────────────────────────
+    # Routes: /email/scan   /email/submit   /email/history
     from backend.app.routes.email_scan import email_scan_bp
-    app.register_blueprint(email_scan_bp, url_prefix="/email")
+    app.register_blueprint(email_scan_bp)
 
-    # Phase 2 — URL Intelligence
+    # ── Phase 2 — URL Intelligence ─────────────────────────────────────────
+    # Routes: /url/intel   /url/submit   /url/history   /url/detail/<id>
     from backend.app.routes.url_intel import url_intel_bp
-    app.register_blueprint(url_intel_bp, url_prefix="/url")
+    app.register_blueprint(url_intel_bp)
 
-    # Phase 3 — Network Scan
+    # ── Phase 3 — Network Scan ─────────────────────────────────────────────
+    # Routes: /network/scan   /network/submit   /network/history
     from backend.app.routes.network_scan import network_scan_bp
-    app.register_blueprint(network_scan_bp, url_prefix="/network")
+    app.register_blueprint(network_scan_bp)
 
-    # Phase 4 — Detection Rules
+    # ── Phase 4 — Detection Rules ──────────────────────────────────────────
+    # Routes: /rules   /rules/scan/url   /rules/scan/email   /rules/list
     from backend.app.routes.detection_rules import rules_bp
-    app.register_blueprint(rules_bp, url_prefix="/rules")
+    app.register_blueprint(rules_bp)
 
-    # Phase 5 — ML Classifier
+    # ── Phase 5 — ML Classifier ────────────────────────────────────────────
+    # Routes: /ml/classifier   /ml/scan   /ml/scan/batch
     from backend.app.routes.ml_classifier import ml_bp
-    app.register_blueprint(ml_bp, url_prefix="/ml")
+    app.register_blueprint(ml_bp)
 
-    # Phase 6 — Attachment Analysis
+    # ── Phase 6 — Attachment Analysis ─────────────────────────────────────
+    # Routes: /attachments   /attachments/submit   /attachments/history
     from backend.app.routes.attachment import attachment_bp
-    app.register_blueprint(attachment_bp, url_prefix="/attachments")
+    app.register_blueprint(attachment_bp)
 
-    # ── Phases 7–16: placeholder blueprints ───────────────────────────────
-    # Each entry: (module_path, bp_name, url_prefix, title, phase_label)
-    # The try/except means missing route files simply show a
-    # "coming soon" page instead of crashing the server.
+    # ── Phases 7-16 — Optional blueprints ─────────────────────────────────
+    # Format: (module_path, bp_variable_name, placeholder_url, title, phase)
+    #
+    # placeholder_url is ONLY used when the route file doesn't exist yet
+    # and we need to register a "coming soon" page at that URL.
+    # When the real route file exists, it defines its own URL — no prefix.
 
     optional_blueprints = [
         (
@@ -180,18 +199,28 @@ def _register_blueprints(app: Flask) -> None:
         ),
     ]
 
-    for module_path, bp_name, url_prefix, title, phase in optional_blueprints:
+    for module_path, bp_name, placeholder_url, title, phase in optional_blueprints:
         try:
+            # Try to import the real route file
             module = importlib.import_module(module_path)
             bp     = getattr(module, bp_name)
-            app.register_blueprint(bp, url_prefix=url_prefix)
+
+            # Register with NO url_prefix — the route file has full paths
+            app.register_blueprint(bp)
             logger.debug(f"Registered blueprint: {bp_name}")
+
         except (ImportError, AttributeError):
-            # Route file doesn't exist yet — show placeholder page
-            _register_placeholder(app, bp_name, url_prefix, title, phase)
+            # Route file doesn't exist yet — register a placeholder page
+            # at the expected URL so the sidebar link doesn't 404
+            _register_placeholder(
+                app,
+                name=bp_name,
+                url=placeholder_url,
+                title=title,
+                phase=phase
+            )
             logger.debug(
-                f"Placeholder registered for {bp_name} "
-                f"({phase} not yet built)"
+                f"Placeholder registered for {bp_name} ({phase} not yet built)"
             )
 
 
@@ -207,9 +236,7 @@ def _setup_database(app: Flask) -> None:
     with app.app_context():
         try:
             # Import all models so SQLAlchemy registers every table
-            # before create_all() is called. The noqa comment suppresses
-            # "imported but unused" linter warnings — the import is
-            # needed purely for its side-effect of registering models.
+            # before create_all() is called.
             import backend.app.models  # noqa: F401
 
             db.create_all()
@@ -241,17 +268,23 @@ def _register_placeholder(
     phase: str
 ) -> None:
     """
-    Register a minimal "coming soon" blueprint for any module route
+    Register a minimal 'coming soon' blueprint for any module route
     file that hasn't been created yet.
 
-    The page is self-contained HTML so it works even before
-    base.html or any CSS is available.
+    This is only used when the real route file does not exist.
+    Once you create the real route file, this placeholder is
+    automatically bypassed by the try/except in _register_blueprints().
     """
     from flask import Blueprint
 
+    # Use a unique name to avoid blueprint name conflicts
     bp = Blueprint(f"placeholder_{name}", __name__)
 
     def _make_view(t: str, p: str):
+        """
+        Closure that captures title and phase for the placeholder page.
+        Returns a view function — not the HTML directly.
+        """
         def view():
             return (
                 f"""<!DOCTYPE html>
@@ -291,7 +324,7 @@ def _register_placeholder(
   <div class="badge">{p} — not yet built</div>
   <h1>{t}</h1>
   <p>This module will be available once {p} is completed.</p>
-  <a href="/">← Back to Overview</a>
+  <a href="/">&#8592; Back to Overview</a>
 </body>
 </html>""",
                 200,

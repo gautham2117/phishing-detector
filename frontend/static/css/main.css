@@ -1217,3 +1217,25 @@ select {
 /* ── Results section spacing ─────────────────────────────────────────────── */
 .att-results .card          { margin-bottom: 16px; }
 .att-results                { margin-top: 24px; }
+
+/* ── Phase 7 Image Analysis additions ── */
+
+.ocr-text-display {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  max-height: 120px;
+  overflow-y: auto;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.model-unavailable {
+  color: var(--amber);
+  font-size: 12px;
+}

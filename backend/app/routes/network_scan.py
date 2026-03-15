@@ -1,6 +1,4 @@
 # network_scan.py
-# Flask Blueprint for the Network Scan dashboard page.
-
 import json
 import requests
 import logging
@@ -12,7 +10,7 @@ from backend.app.models import NetworkScan, PortResult
 from backend.app.database import db
 from backend.modules.network_scanner import is_demo_target
 
-logger = logging.getLogger(__name__)
+logger         = logging.getLogger(__name__)
 network_scan_bp = Blueprint("network_scan", __name__)
 
 
@@ -22,7 +20,6 @@ def _api():
 
 @network_scan_bp.route("/network/scan", methods=["GET"])
 def network_scan_page():
-    """Render the Network Scan dashboard page."""
     recent = (
         NetworkScan.query
         .order_by(NetworkScan.scanned_at.desc())
@@ -34,12 +31,7 @@ def network_scan_page():
 
 @network_scan_bp.route("/network/submit", methods=["POST"])
 def submit_network_scan():
-    """
-    Proxy a network scan request to FastAPI.
-    Handles the consent gate — if the target is not a demo target,
-    requires consent_confirmed=True from the frontend.
-    """
-    data = request.get_json() or {}
+    data              = request.get_json() or {}
     target            = data.get("target", "").strip()
     scan_type         = data.get("scan_type", "top100")
     consent_confirmed = data.get("consent_confirmed", False)
@@ -49,16 +41,13 @@ def submit_network_scan():
     if not target:
         return jsonify({"error": "No target provided"}), 400
 
-    # If not a demo target and consent not confirmed, return a warning
-    # the UI will show a consent dialog before re-submitting
     if not is_demo_target(target) and not consent_confirmed:
         return jsonify({
             "requires_consent": True,
             "message": (
                 f"'{target}' is not a pre-authorized demo target. "
                 "Port scanning without authorization is illegal. "
-                "Only proceed if you own this domain or have written permission. "
-                "Confirm consent to proceed."
+                "Only proceed if you own this domain or have written permission."
             )
         }), 403
 
@@ -72,14 +61,13 @@ def submit_network_scan():
                 "url_scan_id":       url_scan_id,
                 "email_scan_id":     email_scan_id
             },
-            # Nmap scans take time — timeout scales with scan_type
             timeout={"quick": 30, "top100": 60,
                      "top1000": 120, "full": 700}.get(scan_type, 60)
         )
         return jsonify(resp.json()), resp.status_code
 
     except requests.exceptions.Timeout:
-        return jsonify({"error": "Scan timed out — try scan_type=quick first"}), 504
+        return jsonify({"error": "Scan timed out"}), 504
     except requests.exceptions.ConnectionError:
         return jsonify({"error": "Cannot connect to FastAPI"}), 503
     except Exception as e:
@@ -88,7 +76,6 @@ def submit_network_scan():
 
 @network_scan_bp.route("/network/history", methods=["GET"])
 def network_history():
-    """Return recent network scans as JSON for live polling."""
     scans = (
         NetworkScan.query
         .order_by(NetworkScan.scanned_at.desc())
@@ -111,8 +98,7 @@ def network_history():
 
 @network_scan_bp.route("/network/detail/<int:scan_id>", methods=["GET"])
 def network_detail(scan_id: int):
-    """Return full port list for a specific scan (for the detail drawer)."""
-    scan = NetworkScan.query.get_or_404(scan_id)
+    scan  = NetworkScan.query.get_or_404(scan_id)
     ports = PortResult.query.filter_by(network_scan_id=scan_id).all()
 
     return jsonify({
