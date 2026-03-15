@@ -19,15 +19,15 @@
 
   <!-- Role badge -->
   <div class="sidebar-role-badge">
-    <span id="sidebarRoleIcon">{{ session.get('role_icon', '?') }}</span>
-    <span id="sidebarRoleLabel">{{ session.get('role_label', 'No Role') }}</span>
+    <span id="sidebarRoleIcon">{{ role_icon }}</span>
+    <span id="sidebarRoleLabel">{{ role_label }}</span>
     <a href="/role/clear" class="sidebar-role-switch" title="Switch role">⇄</a>
   </div>
 
   <nav class="sidebar-nav">
     {% for section in sidebar %}
     <div class="sidebar-section-label">{{ section.section }}</div>
-    {% for item in section.items %}
+    {% for item in section['items'] %}
     <a href="{{ item.url }}"
        class="sidebar-link {% if request.path == item.url or request.path.startswith(item.url.rstrip('/') + '/') %}active{% endif %}">
       <span class="sidebar-link-icon">{{ item.icon }}</span>
@@ -52,8 +52,8 @@
     <div class="topbar-title">{% block page_title %}{% endblock %}</div>
     <div class="topbar-right">
       <span class="topbar-role">
-        {{ session.get('role_icon', '') }}
-        {{ session.get('role_label', '') }}
+        {{ role_icon }}
+        {{ role_label }}
       </span>
     </div>
   </header>
@@ -61,20 +61,6 @@
   <div class="content-area">
     {% block content %}{% endblock %}
   </div>
-  <nav class="sidebar-nav">
-  {% if sidebar %}
-    {% for section in sidebar %}
-    <div class="sidebar-section-label">{{ section.section }}</div>
-    {% for item in section.items %}
-    <a href="{{ item.url }}"
-       class="sidebar-link {% if request.path == item.url %}active{% endif %}">
-      <span class="sidebar-link-icon">{{ item.icon }}</span>
-      <span class="sidebar-link-label">{{ item.label }}</span>
-    </a>
-    {% endfor %}
-    {% endfor %}
-  {% endif %}
-</nav>
 
 </main>
 
