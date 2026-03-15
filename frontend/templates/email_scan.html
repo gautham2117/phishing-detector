@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Email Scan{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Email Scan</h1>
+  <span class="last-updated" id="last-updated">
+    Last updated: <span id="update-time">—</span>
+  </span>
+  <button class="btn-refresh" onclick="refreshHistory()">Refresh</button>
+</div>
+
+<!-- ── Upload / Paste form ── -->
+<div class="card">
+  <h2>Submit email for analysis</h2>
+
+  <!-- Tab switcher: Upload .eml vs Paste raw -->
+  <div class="tab-bar">
+    <button class="tab active" id="tab-upload" onclick="switchTab('upload')">
+      Upload .eml file
+    </button>
+    <button class="tab" id="tab-paste" onclick="switchTab('paste')">
+      Paste raw email
+    </button>
+  </div>
+
+  <!-- Upload .eml tab -->
+  <div id="panel-upload">
+    <div class="upload-zone" id="drop-zone">
+      <p>Drag &amp; drop a <code>.eml</code> file here, or</p>
+      <label class="btn-primary" for="eml-file-input">Choose file</label>
+      <input type="file" id="eml-file-input" accept=".eml" style="display:none"
+             onchange="handleFileSelect(this)">
+      <p class="hint">Only .eml files — max 10 MB — for educational use only</p>
+    </div>
+  </div>
+
+  <!-- Paste raw email tab (hidden by default) -->
+  <div id="panel-paste" style="display:none">
+    <textarea id="raw-email-input" rows="12"
+              placeholder="Paste the full raw email here (including headers like From:, To:, Subject:, Received:...)">
+    </textarea>
+    <button class="btn-primary" onclick="submitPastedEmail()">
+      Scan pasted email
+    </button>
+  </div>
+</div>
+
+<!-- ── Scan result display (fills in after scan) ── -->
+<div class="card" id="result-card" style="display:none">
+  <div class="result-header">
+    <h2>Scan result</h2>
+    <div class="risk-badge" id="risk-badge">—</div>
+  </div>
+
+  <!-- Risk score bar -->
+  <div class="score-bar-container">
+    <div class="score-bar-track">
+      <div class="score-bar-fill" id="score-bar" style="width:0%"></div>
+    </div>
+    <span class="score-number" id="score-number">0</span>
+    <span class="score-label">/ 100</span>
+  </div>
+
+  <!-- Recommended action -->
+  <div class="action-pill" id="action-pill">—</div>
+
+  <!-- DistilBERT result card -->
+  <div class="module-card">
+    <h3>DistilBERT classification</h3>
+    <div class="model-result" id="distilbert-result">—</div>
+    <div class="confidence-bar-track">
+      <div class="confidence-bar-fill" id="confidence-bar" style="width:0%"></div>
+    </div>
+    <span class="confidence-label" id="confidence-label">0% confidence</span>
+  </div>
+
+  <!-- Auth results row -->
+  <div class="module-card">
+    <h3>Email authentication</h3>
+    <div class="auth-row">
+      <div class="auth-pill" id="spf-pill">SPF —</div>
+      <div class="auth-pill" id="dkim-pill">DKIM —</div>
+      <div class="auth-pill" id="dmarc-pill">DMARC —</div>
+    </div>
+  </div>
+
+  <!-- Header anomalies list -->
+  <div class="module-card">
+    <h3>Header anomalies <span class="count-badge" id="anomaly-count">0</span></h3>
+    <ul class="anomaly-list" id="anomaly-list">
+      <li class="empty-state">No anomalies detected</li>
+    </ul>
+  </div>
+
+  <!-- Extracted URLs table -->
+  <div class="module-card">
+    <h3>Extracted URLs <span class="count-badge" id="url-count">0</span></h3>
+    <table class="data-table" id="url-table">
+      <thead>
+        <tr>
+          <th>URL</th>
+          <th>Domain</th>
+          <th>Flags</th>
+          <th>Shortener</th>
+        </tr>
+      </thead>
+      <tbody id="url-table-body">
+        <tr><td colspan="4" class="empty-state">No URLs extracted</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Explanation -->
+  <div class="module-card">
+    <h3>Explanation</h3>
+    <p id="explanation-text" class="explanation">—</p>
+  </div>
+</div>
+
+<!-- ── Spinner (shown while scanning) ── -->
+<div class="spinner-overlay" id="spinner" style="display:none">
+  <div class="spinner"></div>
+  <p>Scanning with DistilBERT...</p>
+</div>
+
+<!-- ── Recent scans history table ── -->
+<div class="card">
+  <h2>Recent scans</h2>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>ID</th><th>File</th><th>From</th>
+        <th>Subject</th><th>Score</th><th>Label</th><th>Scanned at</th>
+      </tr>
+    </thead>
+    <tbody id="history-table-body">
+      {% for scan in recent_scans %}
+      <tr>
+        <td>{{ scan.id }}</td>
+        <td>{{ scan.filename }}</td>
+        <td class="truncate">{{ scan.sender }}</td>
+        <td class="truncate">{{ scan.subject }}</td>
+        <td>
+          <span class="score-pill score-{{ scan.label | lower }}">
+            {{ scan.risk_score | round(1) }}
+          </span>
+        </td>
+        <td>
+          <span class="label-badge label-{{ scan.label | lower }}">{{ scan.label }}</span>
+        </td>
+        <td>{{ scan.scanned_at.strftime('%Y-%m-%d %H:%M') if scan.scanned_at else '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty-state">No scans yet — upload an email above</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
