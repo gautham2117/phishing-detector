@@ -2124,9 +2124,8 @@ async def retrain_model():
 # Phase 13 — Alerting & Audit System
 # ─────────────────────────────────────────────────────────────────────────────
 
-from fastapi import Request as FastAPIRequest
-from fastapi.responses import StreamingResponse
 import io as _io
+from fastapi.responses import StreamingResponse
 
 class CreateAlertRequest(PydanticBase):
     module:             str
@@ -2150,6 +2149,12 @@ class DismissRequest(PydanticBase):
     actor:  Optional[str] = "admin"
 
 
+def _flask_ctx():
+    """Return a fresh Flask app context for use inside FastAPI endpoints."""
+    from backend.app import create_app as _cfa
+    return _cfa().app_context()
+
+
 @router.post(
     "/alerts",
     summary="Manually create an alert",
@@ -2157,18 +2162,19 @@ class DismissRequest(PydanticBase):
 )
 async def api_create_alert(req: CreateAlertRequest):
     try:
-        alert_id = create_alert(
-            module             = req.module,
-            input_type         = req.input_type,
-            scan_id            = req.scan_id,
-            risk_score         = req.risk_score,
-            verdict            = req.verdict,
-            recommended_action = req.recommended_action,
-            triggered_rules    = req.triggered_rules or [],
-            ml_verdicts        = req.ml_verdicts    or {},
-            raw_findings       = req.raw_findings   or {},
-            actor              = req.actor or "admin",
-        )
+        with _flask_ctx():
+            alert_id = create_alert(
+                module             = req.module,
+                input_type         = req.input_type,
+                scan_id            = req.scan_id,
+                risk_score         = req.risk_score,
+                verdict            = req.verdict,
+                recommended_action = req.recommended_action,
+                triggered_rules    = req.triggered_rules or [],
+                ml_verdicts        = req.ml_verdicts    or {},
+                raw_findings       = req.raw_findings   or {},
+                actor              = req.actor or "admin",
+            )
         if alert_id is None:
             return JSONResponse(
                 status_code=422,
@@ -2179,10 +2185,7 @@ async def api_create_alert(req: CreateAlertRequest):
         return {"status": "success", "alert_id": alert_id}
     except Exception as e:
         logger.error(f"Create alert error: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content=error_response(str(e))
-        )
+        return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
 @router.get(
@@ -2199,20 +2202,14 @@ async def api_list_alerts(
     limit:     int           = 100,
 ):
     try:
-        alerts = get_alerts(
-            severity=severity, module=module, status=status,
-            date_from=date_from, date_to=date_to, limit=limit,
-        )
-        return {
-            "status": "success",
-            "alerts": alerts,
-            "total":  len(alerts),
-        }
+        with _flask_ctx():
+            alerts = get_alerts(
+                severity=severity, module=module, status=status,
+                date_from=date_from, date_to=date_to, limit=limit,
+            )
+        return {"status": "success", "alerts": alerts, "total": len(alerts)}
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content=error_response(str(e))
-        )
+        return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
 @router.get(
@@ -2222,12 +2219,11 @@ async def api_list_alerts(
 )
 async def api_alert_stats():
     try:
-        return {"status": "success", "stats": get_alert_stats()}
+        with _flask_ctx():
+            stats = get_alert_stats()
+        return {"status": "success", "stats": stats}
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content=error_response(str(e))
-        )
+        return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
 @router.get(
@@ -2243,10 +2239,11 @@ async def api_export_csv(
     date_to:   Optional[str] = None,
 ):
     try:
-        csv_bytes = export_alerts_csv(
-            severity=severity, module=module, status=status,
-            date_from=date_from, date_to=date_to,
-        )
+        with _flask_ctx():
+            csv_bytes = export_alerts_csv(
+                severity=severity, module=module, status=status,
+                date_from=date_from, date_to=date_to,
+            )
         filename = (
             f"phishguard_alerts_"
             f"{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -2254,15 +2251,10 @@ async def api_export_csv(
         return StreamingResponse(
             _io.BytesIO(csv_bytes),
             media_type="text/csv",
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}"
-            },
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content=error_response(str(e))
-        )
+        return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
 @router.get(
@@ -2272,17 +2264,15 @@ async def api_export_csv(
 )
 async def api_get_alert(alert_id: int):
     try:
-        alert = get_alert_detail(alert_id)
+        with _flask_ctx():
+            alert = get_alert_detail(alert_id)
         if alert is None:
             raise HTTPException(status_code=404, detail="Alert not found.")
         return {"status": "success", "alert": alert}
     except HTTPException:
         raise
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content=error_response(str(e))
-        )
+        return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
 @router.get(
@@ -2292,13 +2282,13 @@ async def api_get_alert(alert_id: int):
 )
 async def api_export_pdf(alert_id: int):
     try:
-        pdf_bytes = export_alert_pdf(alert_id)
+        with _flask_ctx():
+            pdf_bytes = export_alert_pdf(alert_id)
         if not pdf_bytes:
             raise HTTPException(
                 status_code=404,
                 detail="Alert not found or PDF generation failed."
             )
-        # Detect if fallback HTML was returned
         is_html = pdf_bytes.startswith(b"<!DOCTYPE")
         if is_html:
             return StreamingResponse(
@@ -2320,10 +2310,7 @@ async def api_export_pdf(alert_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content=error_response(str(e))
-        )
+        return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
 @router.post(
@@ -2333,18 +2320,15 @@ async def api_export_pdf(alert_id: int):
 )
 async def api_acknowledge_alert(alert_id: int, req: AcknowledgeRequest):
     try:
-        result = acknowledge_alert(alert_id, actor=req.actor or "admin")
+        with _flask_ctx():
+            result = acknowledge_alert(alert_id, actor=req.actor or "admin")
         if "error" in result:
             return JSONResponse(
-                status_code=400,
-                content=error_response(result["error"])
+                status_code=400, content=error_response(result["error"])
             )
         return result
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content=error_response(str(e))
-        )
+        return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
 @router.post(
@@ -2354,22 +2338,19 @@ async def api_acknowledge_alert(alert_id: int, req: AcknowledgeRequest):
 )
 async def api_dismiss_alert(alert_id: int, req: DismissRequest):
     try:
-        result = dismiss_alert(
-            alert_id,
-            reason = req.reason or "",
-            actor  = req.actor  or "admin",
-        )
+        with _flask_ctx():
+            result = dismiss_alert(
+                alert_id,
+                reason = req.reason or "",
+                actor  = req.actor  or "admin",
+            )
         if "error" in result:
             return JSONResponse(
-                status_code=400,
-                content=error_response(result["error"])
+                status_code=400, content=error_response(result["error"])
             )
         return result
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content=error_response(str(e))
-        )
+        return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
 @router.get(
@@ -2379,10 +2360,8 @@ async def api_dismiss_alert(alert_id: int, req: DismissRequest):
 )
 async def api_audit_log(limit: int = 100):
     try:
-        logs = get_audit_log(limit=limit)
+        with _flask_ctx():
+            logs = get_audit_log(limit=limit)
         return {"status": "success", "logs": logs, "total": len(logs)}
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content=error_response(str(e))
-        )
+        return JSONResponse(status_code=500, content=error_response(str(e)))

@@ -37,7 +37,6 @@ class EmailScan(db.Model):
     # Relationships
     urls         = db.relationship("URLScan",        backref="email", lazy=True)
     attachments  = db.relationship("AttachmentScan", backref="email", lazy=True)
-    alerts       = db.relationship("Alert",          backref="email", lazy=True)
     network_scans= db.relationship("NetworkScan",    backref="email", lazy=True)
 
 
