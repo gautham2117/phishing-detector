@@ -1,0 +1,21 @@
+## TEST EMAIL
+
+From: <security-alert@paypa1-support.xyz>
+To: <victim@example.com>
+Reply-To: <collect@evil-domain.ru>
+Subject: URGENT: Verify your account immediately
+Date: Mon, 01 Jan 2024 10:00:00 +0000
+Message-ID: <fake123@paypa1-support.xyz>
+Authentication-Results: mx.example.com;
+    dkim=fail;
+    spf=fail;
+    dmarc=fail
+
+Dear Customer,
+
+Your PayPal account has been limited. Verify now or your account will be suspended.
+
+Click here: <http://192.168.1.100/paypal-verify?token=abc123>
+Or visit: <http://www.paypa1-secure-login.xyz/verify>
+
+This is urgent. Act now.

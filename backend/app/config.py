@@ -1,60 +1,95 @@
 # config.py
 # Centralized configuration using environment variables.
-# We use python-dotenv to load the .env file automatically.
+# All file paths are built as absolute paths from this file's
+# location so they work regardless of which directory you run
+# the server from.
 
 import os
 from dotenv import load_dotenv
 
-# Load the .env file from the project root.
-# This makes all key=value pairs in .env available via os.environ.
-load_dotenv()
+# Load .env from the project root (two levels above this file)
+# __file__ = .../phishing-detector/backend/app/config.py
+# app_dir      = .../phishing-detector/backend/app/
+# backend_dir  = .../phishing-detector/backend/
+# project_root = .../phishing-detector/
+_app_dir      = os.path.dirname(os.path.abspath(__file__))
+_backend_dir  = os.path.dirname(_app_dir)
+_project_root = os.path.dirname(_backend_dir)
+
+# Load the .env file from project root
+load_dotenv(os.path.join(_project_root, ".env"))
+
+# Build the absolute path to the database folder and file
+_database_dir  = os.path.join(_project_root, "database")
+_database_file = os.path.join(_database_dir, "phishing_detector.db")
+
+# Create the database/ directory right now if it doesn't exist.
+# This is the key fix — SQLite cannot create the file if the
+# parent directory doesn't exist.
+os.makedirs(_database_dir, exist_ok=True)
+
 
 class Config:
-    """Base configuration class. All settings are read from environment variables."""
+    """Base configuration — all settings read from environment variables."""
 
-    # Flask secret key — used to sign session cookies.
-    # NEVER hardcode this. Always load from environment.
-    SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
-
-    # SQLAlchemy database URI.
-    # Default: SQLite file in the /database/ folder.
-    SQLALCHEMY_DATABASE_URI = os.environ.get(
-        "DATABASE_URL",
-        "sqlite:///database/phishing_detector.db"
+    # Flask secret key — signs session cookies
+    SECRET_KEY = os.environ.get(
+        "FLASK_SECRET_KEY",
+        "dev-secret-key-change-in-production"
     )
 
-    # Disable SQLAlchemy's modification tracking (saves memory).
+    # SQLite database URI using absolute path
+    # sqlite:/// (3 slashes) + absolute path = correct on all platforms
+    SQLALCHEMY_DATABASE_URI = os.environ.get(
+        "DATABASE_URL",
+        f"sqlite:///{_database_file}"
+    )
+
+    # Disable SQLAlchemy modification tracking (saves memory)
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
-    # FastAPI service URL — Flask will proxy scan requests here.
-    FASTAPI_BASE_URL = os.environ.get("FASTAPI_BASE_URL", "http://127.0.0.1:8001")
+    # FastAPI microservice URL
+    FASTAPI_BASE_URL = os.environ.get(
+        "FASTAPI_BASE_URL",
+        "http://127.0.0.1:8001"
+    )
 
-    # Redis URL (optional for local dev — used for task queue concept).
+    # Redis URL (optional for local dev)
     REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
     # Optional external API keys
     VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "")
-    IPINFO_TOKEN = os.environ.get("IPINFO_TOKEN", "")
+    IPINFO_TOKEN       = os.environ.get("IPINFO_TOKEN", "")
 
 
 class DevelopmentConfig(Config):
-    """Development-specific config: debug mode on, verbose logging."""
-    DEBUG = True
+    """Development config — debug on, verbose logging."""
+    DEBUG   = True
     TESTING = False
 
 
 class ProductionConfig(Config):
-    """Production config: debug off, use PostgreSQL."""
-    DEBUG = False
+    """
+    Production config — debug off.
+    Set DATABASE_URL in .env to point to PostgreSQL:
+    DATABASE_URL=postgresql://user:password@localhost/phishing_db
+    """
+    DEBUG   = False
     TESTING = False
-    # In production, DATABASE_URL should point to PostgreSQL.
-    # Example: postgresql://user:password@localhost/phishing_db
+
+
+class TestingConfig(Config):
+    """Testing config — uses a separate in-memory SQLite database."""
+    TESTING = True
+    DEBUG   = True
+    SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
 
 
 # Map string names to config classes.
-# We use this in the app factory: app.config.from_object(config_map[env])
+# Used in create_app(): app.config.from_object(config_map[env])
 config_map = {
     "development": DevelopmentConfig,
-    "production": ProductionConfig,
-    "default": DevelopmentConfig,
+    "production":  ProductionConfig,
+    "testing":     TestingConfig,
+    "default":     DevelopmentConfig,
 }

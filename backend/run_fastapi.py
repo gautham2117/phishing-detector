@@ -1,20 +1,17 @@
-# run_fastapi.py
-# Entry point to start the FastAPI detection API.
-# Run: python backend/run_fastapi.py
-# Swagger docs will be at: http://127.0.0.1:8001/docs
+# backend/run_fastapi.py
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uvicorn
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(__file__))
 
 if __name__ == "__main__":
     print("Starting FastAPI on http://127.0.0.1:8001")
-    print("Swagger UI available at: http://127.0.0.1:8001/docs")
+    print("Swagger UI: http://127.0.0.1:8001/docs")
     uvicorn.run(
-        "api.main:app",     # module:object
+        "backend.api.main:app",
         host="127.0.0.1",
         port=8001,
-        reload=True         # auto-reload on file changes (dev only)
+        reload=True
     )

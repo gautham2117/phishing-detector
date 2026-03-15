@@ -90,6 +90,18 @@ async function uploadEmlFile(file) {
     }
 
     renderScanResult(data);
+
+    // In scan_ui.js — add after renderScanResult(data):
+    // Auto-trigger URL batch scan for all URLs found in the email
+    const urls = data.module_results?.email_parser?.urls?.map(u => u.raw) || [];
+    if (urls.length > 0 && data.scan_id) {
+      fetch("/url/submit/batch", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ urls, email_scan_id: data.scan_id })
+      });
+      // Results will appear in the URL Intelligence history within ~30 seconds
+     }
     // Immediately refresh the history table to show the new scan
     refreshHistory();
 

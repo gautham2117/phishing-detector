@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}Network Scan{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Network Scan</h1>
+  <span class="last-updated">Last updated: <span id="update-time">—</span></span>
+  <button class="btn-refresh" onclick="refreshHistory()">Refresh</button>
+</div>
+
+<!-- ── Ethics notice ── -->
+<div class="ethics-banner">
+  <strong>Authorized use only.</strong>
+  Only scan domains you own or have explicit written permission to scan.
+  <code>scanme.nmap.org</code> and <code>localhost</code> are always safe.
+</div>
+
+<!-- ── Scan form ── -->
+<div class="card">
+  <h2>Scan a target</h2>
+  <div class="scan-form-row">
+    <input type="text" id="target-input"
+           placeholder="scanme.nmap.org or localhost"
+           onkeydown="if(event.key==='Enter') initiateScan()">
+    <select id="scan-type-select">
+      <option value="quick">Quick (top 20 ports, ~5s)</option>
+      <option value="top100" selected>Standard (top 100 ports, ~15s)</option>
+      <option value="top1000">Thorough (top 1000 ports, ~60s)</option>
+      <option value="full">Full (all ports, ~10 min)</option>
+    </select>
+    <button class="btn-primary" onclick="initiateScan()">Scan</button>
+  </div>
+  <p class="hint">
+    Linked scans: enter a domain from a URL intelligence scan to
+    automatically link results. Or scan <code>scanme.nmap.org</code>
+    to see how a real scan works.
+  </p>
+</div>
+
+<!-- ── Consent modal (shown for non-demo targets) ── -->
+<div id="consent-overlay" style="display:none;min-height:340px;
+     background:rgba(0,0,0,0.65);display:none;
+     align-items:center;justify-content:center;">
+  <div class="consent-modal">
+    <h2>Authorization required</h2>
+    <p id="consent-message">—</p>
+    <div style="margin-top:16px;">
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px;">
+        <input type="checkbox" id="consent-checkbox" style="margin-top:3px;">
+        I confirm I own this domain or have explicit written authorization to scan it.
+        I understand unauthorized port scanning may be illegal.
+      </label>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:16px;">
+      <button class="btn-primary" onclick="confirmConsent()" id="consent-confirm-btn" disabled>
+        Proceed with scan
+      </button>
+      <button class="btn-refresh" onclick="cancelConsent()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Spinner ── -->
+<div class="spinner-overlay" id="spinner" style="display:none">
+  <div class="spinner"></div>
+  <p id="spinner-msg">Running Nmap scan...</p>
+</div>
+
+<!-- ── Result card ── -->
+<div id="result-card" style="display:none">
+
+  <!-- Summary header -->
+  <div class="card">
+    <div class="result-header">
+      <div style="flex:1">
+        <div class="url-display" id="res-target">—</div>
+        <div class="domain-display" id="res-ip">—</div>
+      </div>
+      <div class="risk-badge" id="risk-badge">—</div>
+    </div>
+
+    <!-- Stats row -->
+    <div class="stats-row">
+      <div class="stat-box">
+        <div class="stat-num" id="stat-open">0</div>
+        <div class="stat-lbl">Open ports</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num danger" id="stat-dangerous">0</div>
+        <div class="stat-lbl">Dangerous</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num warning" id="stat-admin">0</div>
+        <div class="stat-lbl">Admin panels</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num" id="stat-duration">—</div>
+        <div class="stat-lbl">Scan duration</div>
+      </div>
+    </div>
+
+    <!-- Risk flags -->
+    <div id="risk-flags-row" style="margin-top:12px;"></div>
+  </div>
+
+  <!-- ── Port results table ── -->
+  <div class="card">
+    <h2>Open ports
+      <span class="count-badge" id="port-count-badge">0</span>
+    </h2>
+    <table class="data-table" id="port-table">
+      <thead>
+        <tr>
+          <th>Port</th>
+          <th>Protocol</th>
+          <th>Service</th>
+          <th>Product</th>
+          <th>Version</th>
+          <th>Risk</th>
+          <th>Detail</th>
+        </tr>
+      </thead>
+      <tbody id="port-table-body">
+        <tr><td colspan="7" class="empty-state">No results yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Admin panel exposures ── -->
+  <div class="card" id="admin-card" style="display:none">
+    <h2>Exposed admin panels</h2>
+    <div id="admin-list"></div>
+  </div>
+
+  <!-- ── OS fingerprint ── -->
+  <div class="card" id="os-card" style="display:none">
+    <h2>OS fingerprint</h2>
+    <p id="os-text" class="explanation">—</p>
+  </div>
+
+  <!-- ── Explanation ── -->
+  <div class="card">
+    <h2>Explanation</h2>
+    <p id="explanation-text" class="explanation">—</p>
+  </div>
+
+</div><!-- /result-card -->
+
+<!-- ── Scan history table ── -->
+<div class="card">
+  <h2>Recent scans</h2>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Target</th><th>IP</th><th>Type</th>
+        <th>Open ports</th><th>Risk</th><th>Duration</th>
+        <th>Auth</th><th>Scanned at</th>
+      </tr>
+    </thead>
+    <tbody id="history-table-body">
+      {% for s in recent_scans %}
+      <tr>
+        <td><code>{{ s.target }}</code></td>
+        <td>{{ s.ip_resolved or '—' }}</td>
+        <td><span class="auth-pill auth-none">{{ s.scan_type }}</span></td>
+        <td>{{ s.total_open_ports }}</td>
+        <td>
+          <span class="label-badge label-{{
+            'safe' if s.risk_level == 'LOW' else
+            'suspicious' if s.risk_level in ('MEDIUM','HIGH') else
+            'malicious' if s.risk_level == 'CRITICAL' else 'unknown'
+          }}">{{ s.risk_level }}</span>
+        </td>
+        <td>{{ '%.1f'|format(s.scan_duration_s or 0) }}s</td>
+        <td>
+          {% if s.authorized %}
+            <span class="auth-pill auth-pass">yes</span>
+          {% else %}
+            <span class="auth-pill auth-fail">blocked</span>
+          {% endif %}
+        </td>
+        <td>{{ s.scanned_at.strftime('%Y-%m-%d %H:%M') if s.scanned_at else '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="empty-state">No network scans yet</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

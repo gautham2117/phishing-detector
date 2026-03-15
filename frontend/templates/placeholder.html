@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}{{ module_title }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>{{ module_title }}</h1>
+  <span class="last-updated">{{ module_phase }}</span>
+</div>
+
+<div class="card" style="text-align:center; padding: 48px 32px;">
+
+  <!-- Phase badge -->
+  <div style="
+    display: inline-block;
+    padding: 6px 16px;
+    background: rgba(56,139,253,0.12);
+    border: 1px solid rgba(56,139,253,0.30);
+    border-radius: 20px;
+    color: #388bfd;
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 20px;
+  ">
+    {{ module_phase }} — not yet built
+  </div>
+
+  <h2 style="font-size:18px; margin-bottom:12px;">
+    {{ module_title }}
+  </h2>
+
+  <p style="
+    color: var(--text-muted);
+    font-size: 14px;
+    max-width: 520px;
+    margin: 0 auto 28px;
+    line-height: 1.7;
+  ">
+    {{ module_description }}
+  </p>
+
+  <!-- Coming features list -->
+  {% if coming_modules %}
+  <div style="
+    text-align: left;
+    display: inline-block;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+    max-width: 480px;
+    width: 100%;
+  ">
+    <p style="
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    ">
+      Features coming in this phase
+    </p>
+    <ul style="
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    ">
+      {% for feature in coming_modules %}
+      <li style="
+        padding: 6px 0;
+        border-bottom: 1px solid var(--border);
+        font-size: 13px;
+        color: var(--text-muted);
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+      ">
+        <!-- Dot indicator -->
+        <span style="
+          width: 6px; height: 6px;
+          border-radius: 50%;
+          background: var(--border);
+          flex-shrink: 0;
+          margin-top: 6px;
+        "></span>
+        {{ feature }}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <div style="margin-top: 32px;">
+    <a href="/" class="btn-primary"
+       style="text-decoration:none; display:inline-block;">
+      ← Back to Overview
+    </a>
+  </div>
+
+</div>
+{% endblock %}
