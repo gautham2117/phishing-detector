@@ -1,0 +1,29 @@
+# Virtual environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment variables — NEVER commit this
+.env
+
+# Database (may contain sensitive test data)
+database/*.db
+
+# ML model files (too large for git, use git-lfs or exclude)
+backend/ml/models/*.pkl
+backend/ml/datasets/
+
+# HuggingFace model cache
+~/.cache/huggingface/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/settings.json
+
+# Test artifacts
+*.log
+uploads/
