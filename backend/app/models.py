@@ -357,4 +357,18 @@ class AggregatedRiskScore(db.Model):
     breakdown        = db.Column(db.Text,    default="{}")  # JSON dict
     created_at       = db.Column(db.DateTime, default=datetime.utcnow)
 
+
+class ExtensionScan(db.Model):
+    __tablename__ = "extension_scans"
+
+    id             = db.Column(db.Integer,    primary_key=True)
+    url            = db.Column(db.String(2048), default="")
+    domain         = db.Column(db.String(255),  default="")
+    risk_score     = db.Column(db.Float,        default=0.0)
+    label          = db.Column(db.String(30),   default="SAFE")
+    verdict        = db.Column(db.String(30),   default="SAFE")
+    threat_summary = db.Column(db.Text,         default="")
+    recommended_action = db.Column(db.String(30), default="ALLOW")
+    source         = db.Column(db.String(30),   default="extension")
+    scanned_at     = db.Column(db.DateTime,     default=datetime.utcnow)
     

@@ -27,3 +27,23 @@ Thumbs.db
 # Test artifacts
 *.log
 uploads/
+# Chrome extension build artifact
+chrome_extension.zip
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+venv/
+
+# Database
+database/*.db
+
+# ML model files (large binaries)
+backend/ml/models/*.pkl
+
+# OS files
+.DS_Store
+Thumbs.db

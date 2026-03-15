@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% block title %}Extension & Integration — PhishGuard{% endblock %}
+
+{% block content %}
+<!-- Data island -->
+<div id="page-data"
+     data-scan-url="/extension/scan"
+     data-history-url="/extension/history"
+     data-status-url="/extension/status"
+     style="display:none"></div>
+
+<div class="page-header">
+  <h1 class="page-title">
+    <span class="title-icon">🧩</span>
+    Browser Extension &amp; Integration
+  </h1>
+  <p class="page-subtitle">
+    Chrome extension · Real-time URL scanning ·
+    Color-coded banners · BART threat summaries
+  </p>
+</div>
+
+<!-- ── Extension status ────────────────────────────────────────────────────── -->
+<div class="ext-status-row">
+
+  <div class="card ext-status-card">
+    <div class="card-header">
+      <span class="card-icon">🔌</span>
+      <span class="card-title">Backend Status</span>
+    </div>
+    <div class="card-body ext-status-body">
+      <div class="ext-status-dot" id="extStatusDot"></div>
+      <div>
+        <div class="ext-status-label" id="extStatusLabel">Checking…</div>
+        <div class="ext-status-sub">FastAPI on http://127.0.0.1:8001</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card ext-install-card">
+    <div class="card-header">
+      <span class="card-icon">📦</span>
+      <span class="card-title">Extension Installation</span>
+    </div>
+    <div class="card-body">
+      <ol class="ext-install-steps">
+        <li>Run <code>python build_extension.py</code> in project root</li>
+        <li>Open <code>chrome://extensions</code> in Chrome</li>
+        <li>Enable <strong>Developer mode</strong> (top-right toggle)</li>
+        <li>Click <strong>Load unpacked</strong> → select <code>chrome_extension/</code></li>
+        <li>PhishGuard icon appears in your toolbar</li>
+      </ol>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Manual URL scan ────────────────────────────────────────────────────── -->
+<div class="card ext-scan-card">
+  <div class="card-header">
+    <span class="card-icon">🔍</span>
+    <span class="card-title">Manual URL Scan</span>
+  </div>
+  <div class="card-body">
+    <div class="ext-scan-row">
+      <input type="url" id="extScanInput" class="form-input ext-url-input"
+             placeholder="https://suspicious-site.example.com">
+      <button class="btn btn-primary" id="extScanBtn">Scan URL</button>
+    </div>
+    <div class="ai-error"   id="extScanError"   style="display:none"></div>
+
+    <!-- Inline result -->
+    <div class="ext-result-panel" id="extResultPanel" style="display:none">
+      <div class="ext-result-header">
+        <span class="ext-result-badge" id="extResultBadge">—</span>
+        <span class="ext-result-score" id="extResultScore"></span>
+        <span class="ext-result-action" id="extResultAction"></span>
+      </div>
+      <div class="ext-result-bar-bg">
+        <div class="ext-result-bar-fill" id="extResultBar" style="width:0%"></div>
+      </div>
+      <div class="ext-result-summary" id="extResultSummary"></div>
+      <div class="ext-result-details" id="extResultDetails"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Extension scan history ─────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-icon">🕐</span>
+    <span class="card-title">Recent Extension Scans</span>
+    <span class="att-count-badge" id="extHistCount">0</span>
+    <span class="att-poll-indicator">● LIVE</span>
+  </div>
+  <div class="card-body" style="padding:0">
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>URL / Domain</th>
+            <th>Risk Score</th>
+            <th>Verdict</th>
+            <th>Threat Summary</th>
+            <th>Action</th>
+            <th>Source</th>
+            <th>Scanned</th>
+          </tr>
+        </thead>
+        <tbody id="extHistBody">
+          <tr>
+            <td colspan="8" class="att-empty-row">
+              No scans yet — browse with the extension installed.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ── IMAP Integration Architecture ──────────────────────────────────────── -->
+<div class="card ext-arch-card" style="margin-top:20px">
+  <div class="card-header">
+    <span class="card-icon">📐</span>
+    <span class="card-title">
+      Email Client Integration — Conceptual Architecture
+    </span>
+  </div>
+  <div class="card-body">
+    <div class="ext-arch-diagram" id="extArchDiagram">
+
+      <div class="ext-arch-row">
+        <div class="ext-arch-box ext-arch-source">
+          📧 Email Client<br>
+          <small>(Gmail / Outlook / Thunderbird)</small>
+        </div>
+        <div class="ext-arch-arrow">IMAP IDLE / OAuth2 Poll</div>
+        <div class="ext-arch-box ext-arch-ingest">
+          📥 IMAP Poller<br>
+          <small>imaplib / imapclient</small>
+        </div>
+      </div>
+
+      <div class="ext-arch-down-arrow">↓ Raw .eml bytes</div>
+
+      <div class="ext-arch-row">
+        <div class="ext-arch-box ext-arch-pipeline">
+          🔬 Phase 1<br>Email Parser
+        </div>
+        <div class="ext-arch-arrow">→</div>
+        <div class="ext-arch-box ext-arch-pipeline">
+          🔗 Phase 2<br>URL Intel
+        </div>
+        <div class="ext-arch-arrow">→</div>
+        <div class="ext-arch-box ext-arch-pipeline">
+          📎 Phase 6<br>Attachment
+        </div>
+        <div class="ext-arch-arrow">→</div>
+        <div class="ext-arch-box ext-arch-pipeline">
+          🤖 Phase 8<br>AI Detect
+        </div>
+      </div>
+
+      <div class="ext-arch-down-arrow">↓ Aggregated risk score</div>
+
+      <div class="ext-arch-row">
+        <div class="ext-arch-box ext-arch-output ext-arch-safe">
+          ✅ SAFE<br><small>Deliver to inbox</small>
+        </div>
+        <div class="ext-arch-box ext-arch-output ext-arch-warn">
+          ⚠ SUSPICIOUS<br><small>Flag + warn user</small>
+        </div>
+        <div class="ext-arch-box ext-arch-output ext-arch-block">
+          🚫 MALICIOUS<br><small>Quarantine + alert</small>
+        </div>
+      </div>
+
+      <div class="ext-arch-note">
+        <strong>Implementation path:</strong>
+        Use <code>imapclient</code> with IMAP IDLE to receive push notifications
+        for new emails. Decode each message with Python's <code>email</code> stdlib,
+        then pipe through the existing Phase 1 <code>/api/scan/email</code> endpoint.
+        OAuth2 tokens (Gmail API / Microsoft Graph) replace password authentication.
+        The polling daemon runs as a background thread alongside FastAPI.
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/extension.js"></script>
+{% endblock %}

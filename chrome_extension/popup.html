@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PhishGuard</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+
+<div class="pg-header">
+  <div class="pg-logo">🛡 PhishGuard</div>
+  <div class="pg-version">v1.0.0</div>
+</div>
+
+<div class="pg-status-row">
+  <span class="pg-status-dot" id="pgStatusDot"></span>
+  <span class="pg-status-text" id="pgStatusText">Checking backend…</span>
+</div>
+
+<div class="pg-card" id="pgResultCard">
+  <div class="pg-label-row">
+    <span class="pg-verdict-badge" id="pgVerdictBadge">—</span>
+    <span class="pg-score"         id="pgScore">—</span>
+  </div>
+  <div class="pg-bar-bg">
+    <div class="pg-bar-fill" id="pgBarFill" style="width:0%"></div>
+  </div>
+  <div class="pg-url"     id="pgUrl">No scan yet.</div>
+  <div class="pg-summary" id="pgSummary"></div>
+  <div class="pg-action"  id="pgAction"></div>
+</div>
+
+<div class="pg-actions">
+  <button class="pg-btn pg-btn-scan" id="pgScanBtn">
+    🔍 Scan This Page
+  </button>
+  <button class="pg-btn pg-btn-dashboard" id="pgDashBtn">
+    📊 Open Dashboard
+  </button>
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>
