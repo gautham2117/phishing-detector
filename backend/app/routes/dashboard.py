@@ -103,7 +103,6 @@ def role_required(f):
         if not is_allowed(path):
             return render_template(
                 "access_denied.html",
-                role=get_current_role(),
                 path=path,
             ), 403
         return f(*args, **kwargs)
@@ -218,16 +217,9 @@ def role_clear():
 @dashboard_bp.route("/")
 @role_required
 def overview():
-    role        = get_current_role()
-    role_cfg    = ROLES.get(role, {})
-    sidebar     = get_sidebar_config()
-    return render_template(
-        "dashboard.html",
-        role=role,
-        role_label=role_cfg.get("label", ""),
-        role_icon=role_cfg.get("icon",  ""),
-        sidebar=sidebar,
-    )
+    # sidebar / role / role_label / role_icon are injected by the context
+    # processor in __init__.py — do NOT pass them manually here.
+    return render_template("dashboard.html")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -242,7 +234,7 @@ def dashboard_stats():
     scan counts, threat distribution, live feed, top domains, alerts.
     """
     try:
-        today      = datetime.datetime.utcnow().replace(
+        today = datetime.datetime.utcnow().replace(
             hour=0, minute=0, second=0, microsecond=0
         )
 
@@ -309,7 +301,6 @@ def dashboard_health():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _get_threat_distribution() -> dict:
-    """Count Safe / Suspicious / Malicious across all scan tables."""
     safe = suspicious = malicious = 0
 
     def _tally(verdict: str) -> tuple:
@@ -368,7 +359,6 @@ def _get_threat_distribution() -> dict:
 
 
 def _get_live_feed(limit: int = 10) -> list:
-    """Return the most recent scans across all modules."""
     feed = []
 
     try:
@@ -461,7 +451,6 @@ def _get_live_feed(limit: int = 10) -> list:
 
 def _get_top_risky_domains(today: datetime.datetime,
                            limit: int = 5) -> list:
-    """Return top domains by risk score from today's URL scans."""
     try:
         rows = (
             URLScan.query
@@ -495,7 +484,6 @@ def _get_top_risky_domains(today: datetime.datetime,
 
 
 def _recent_alerts(limit: int = 5) -> list:
-    """Return recent open alerts for the dashboard panel."""
     try:
         rows = (
             Alert.query
@@ -506,16 +494,16 @@ def _recent_alerts(limit: int = 5) -> list:
         )
         return [
             {
-                "id":           r.id,
-                "module":       r.module,
-                "severity":     r.severity,
-                "verdict":      r.verdict,
-                "risk_score":   r.risk_score,
-                "summary":      (r.threat_summary or "")[:120],
-                "detail":       (r.threat_summary or "")[:80],
-                "status":       r.status,
-                "created_at":   r.created_at.isoformat() + "Z"
-                                if r.created_at else "",
+                "id":         r.id,
+                "module":     r.module,
+                "severity":   r.severity,
+                "verdict":    r.verdict,
+                "risk_score": r.risk_score,
+                "summary":    (r.threat_summary or "")[:120],
+                "detail":     (r.threat_summary or "")[:80],
+                "status":     r.status,
+                "created_at": r.created_at.isoformat() + "Z"
+                              if r.created_at else "",
             }
             for r in rows
         ]

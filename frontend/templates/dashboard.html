@@ -1,197 +1,174 @@
 {% extends "base.html" %}
-{% block title %}Overview{% endblock %}
+{% block title %}Dashboard — PhishGuard{% endblock %}
 
 {% block content %}
+<!-- Data island — all JS reads endpoints from here, never from Jinja in <script> -->
+<div id="page-data"
+     data-stats-url="/dashboard/stats"
+     data-health-url="/dashboard/health"
+     style="display:none"></div>
+
 <div class="page-header">
-  <h1>Overview</h1>
-  <span class="last-updated">
-    Live — last updated: <span id="update-time">
-      {{ now.strftime('%H:%M:%S') }}
-    </span>
-  </span>
-  <button class="btn-refresh" onclick="refreshDashboard()">Refresh</button>
+  <h1 class="page-title">
+    <span class="title-icon">🏠</span>
+    Overview Dashboard
+  </h1>
+  <p class="page-subtitle">
+    Live scan feed · Threat distribution · Module health · Open alerts
+  </p>
 </div>
 
-<!-- ── Scan count cards ── -->
-<div class="overview-cards">
-  <div class="ov-card">
-    <div class="ov-num" id="ov-total">{{ stats.total_scans_today }}</div>
-    <div class="ov-lbl">Scans today</div>
+<!-- ── Scan count cards ────────────────────────────────────────────────────── -->
+<div class="db-counts-row">
+  <div class="card db-count-card db-count-total">
+    <div class="db-count-icon">📋</div>
+    <div class="db-count-val"  id="dbCountTotal">—</div>
+    <div class="db-count-lbl">Total today</div>
   </div>
-  <div class="ov-card">
-    <div class="ov-num" id="ov-emails">{{ stats.emails_today }}</div>
-    <div class="ov-lbl">Emails</div>
+  <div class="card db-count-card">
+    <div class="db-count-icon">✉</div>
+    <div class="db-count-val"  id="dbCountEmail">—</div>
+    <div class="db-count-lbl">Emails</div>
   </div>
-  <div class="ov-card">
-    <div class="ov-num" id="ov-urls">{{ stats.urls_today }}</div>
-    <div class="ov-lbl">URLs</div>
+  <div class="card db-count-card">
+    <div class="db-count-icon">🔗</div>
+    <div class="db-count-val"  id="dbCountUrl">—</div>
+    <div class="db-count-lbl">URLs</div>
   </div>
-  <div class="ov-card">
-    <div class="ov-num danger" id="ov-threats">{{ stats.threats_today }}</div>
-    <div class="ov-lbl">Threats detected</div>
+  <div class="card db-count-card">
+    <div class="db-count-icon">🌐</div>
+    <div class="db-count-val"  id="dbCountNetwork">—</div>
+    <div class="db-count-lbl">Network</div>
   </div>
-  <div class="ov-card">
-    <div class="ov-num warning" id="ov-alerts">{{ stats.alerts_today }}</div>
-    <div class="ov-lbl">Alerts today</div>
+  <div class="card db-count-card">
+    <div class="db-count-icon">📎</div>
+    <div class="db-count-val"  id="dbCountAttachment">—</div>
+    <div class="db-count-lbl">Attachments</div>
+  </div>
+  <div class="card db-count-card">
+    <div class="db-count-icon">🤖</div>
+    <div class="db-count-val"  id="dbCountAi">—</div>
+    <div class="db-count-lbl">AI Detection</div>
+  </div>
+  <div class="card db-count-card">
+    <div class="db-count-icon">🖼</div>
+    <div class="db-count-val"  id="dbCountImage">—</div>
+    <div class="db-count-lbl">Images</div>
   </div>
 </div>
 
-<!-- ── Two-column main grid ── -->
-<div class="dash-grid">
+<!-- ── Middle row: pie chart · top domains · alerts ────────────────────────── -->
+<div class="db-mid-row">
 
-  <!-- LEFT col: threat feed + top domains -->
-  <div>
-
-    <!-- Live threat feed -->
-    <div class="card">
-      <h2>Live threat feed</h2>
-      <div id="threat-feed">
-        {% for item in threat_feed %}
-        <div class="feed-row feed-{{ item.label | lower }}">
-          <span class="feed-type-pill">{{ item.type }}</span>
-          <span class="feed-display" title="{{ item.detail }}">
-            {{ item.display[:55] }}
-          </span>
-          <span class="feed-score score-{{ item.label | lower }}">
-            {{ item.risk_score }}
-          </span>
-          <span class="label-badge label-{{ item.label | lower }}">
-            {{ item.label }}
-          </span>
-          <a href="{{ item.link }}" class="feed-link">→</a>
+  <!-- Threat distribution pie chart -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-icon">🥧</span>
+      <span class="card-title">Threat Distribution</span>
+    </div>
+    <div class="card-body db-pie-body">
+      <canvas id="dbPieChart" width="160" height="160"></canvas>
+      <div class="db-pie-legend" id="dbPieLegend">
+        <div class="db-pie-item">
+          <span class="db-pie-dot" style="background:#3fb950"></span>
+          <span>Safe</span><strong>—</strong>
         </div>
-        {% else %}
-        <p class="empty-state">No scans yet — upload an email to get started.</p>
-        {% endfor %}
+        <div class="db-pie-item">
+          <span class="db-pie-dot" style="background:#d29922"></span>
+          <span>Suspicious</span><strong>—</strong>
+        </div>
+        <div class="db-pie-item">
+          <span class="db-pie-dot" style="background:#f85149"></span>
+          <span>Malicious</span><strong>—</strong>
+        </div>
       </div>
     </div>
+  </div>
 
-    <!-- Top risky domains -->
-    <div class="card">
-      <h2>Top risky domains (7 days)</h2>
+  <!-- Top risky domains today -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-icon">🎯</span>
+      <span class="card-title">Top Risky Domains Today</span>
+    </div>
+    <div class="card-body" style="padding:0">
       <table class="data-table">
         <thead>
           <tr>
             <th>Domain</th>
-            <th>Avg ML score</th>
-            <th>Scans</th>
-            <th>Label</th>
+            <th>Risk</th>
+            <th>Verdict</th>
           </tr>
         </thead>
-        <tbody id="top-domains-body">
-          {% for d in top_domains %}
+        <tbody id="dbDomainsBody">
           <tr>
-            <td><code>{{ d.domain }}</code></td>
-            <td>
-              <div class="mini-bar-track">
-                <div class="mini-bar-fill {{ 'fill-malicious' if d.avg_score >= 70 else 'fill-suspicious' if d.avg_score >= 30 else 'fill-safe' }}"
-                     style="width:{{ d.avg_score }}%"></div>
-              </div>
-              {{ d.avg_score }}
-            </td>
-            <td>{{ d.scan_count }}</td>
-            <td>
-              <span class="label-badge label-{{ d.label | lower }}">
-                {{ d.label }}
-              </span>
-            </td>
+            <td colspan="3" class="att-empty-row">No URL scans today.</td>
           </tr>
-          {% else %}
-          <tr>
-            <td colspan="4" class="empty-state">No URL scans yet</td>
-          </tr>
-          {% endfor %}
         </tbody>
       </table>
     </div>
+  </div>
 
-  </div><!-- /left col -->
-
-  <!-- RIGHT col: distribution chart + module health + alerts -->
-  <div>
-
-    <!-- Threat distribution chart -->
-    <div class="card">
-      <h2>Threat distribution</h2>
-      <div style="max-width:260px; margin:0 auto;">
-        <canvas id="dist-chart" height="200"></canvas>
-      </div>
-      <div class="dist-legend">
-        <span class="dist-dot safe"></span>Safe
-        <span class="dist-dot suspicious"></span>Suspicious
-        <span class="dist-dot malicious"></span>Malicious
-      </div>
+  <!-- Recent open alerts -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-icon">🚨</span>
+      <span class="card-title">Recent Open Alerts</span>
+      <a href="/alerts/" class="db-view-all">View all →</a>
     </div>
-
-    <!-- 7-day scan trend -->
-    <div class="card">
-      <h2>Scan volume — last 7 days</h2>
-      <canvas id="trend-chart" height="120"></canvas>
+    <div class="card-body db-alerts-body" id="dbAlertsBody">
+      <p class="att-empty-note">No open alerts.</p>
     </div>
+  </div>
 
-    <!-- Module health status row -->
-    <div class="card">
-      <h2>Module health</h2>
-      <div class="health-grid" id="health-grid">
-        {% for m in module_health %}
-        <a href="{{ m.link }}" class="health-pill health-{{ m.status }}"
-           title="{{ m.name }}">
-          <span class="health-dot"></span>
-          {{ m.name }}
-        </a>
-        {% endfor %}
-      </div>
+</div>
+
+<!-- ── Module health row ──────────────────────────────────────────────────── -->
+<div class="card db-health-card">
+  <div class="card-header">
+    <span class="card-icon">🔬</span>
+    <span class="card-title">Module Health</span>
+    <span class="att-poll-indicator">● LIVE</span>
+  </div>
+  <div class="card-body">
+    <div class="db-health-row" id="dbHealthRow">
+      <p class="att-empty-note">Checking modules…</p>
     </div>
+  </div>
+</div>
 
-    <!-- Recent alerts panel -->
-    <div class="card">
-      <h2>Recent alerts</h2>
-      <div id="recent-alerts">
-        {% for a in alerts %}
-        <div class="alert-row sev-{{ a.severity | lower }}">
-          <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
-            <span class="sev-badge sev-{{ a.severity | lower }}">
-              {{ a.severity }}
-            </span>
-            <span style="font-size:12px; color:var(--text-muted)">
-              {{ a.input_type }} · score {{ a.risk_score }}
-            </span>
-            <span class="action-pill action-{{ a.action | lower }}"
-                  style="margin-left:auto; font-size:11px; padding:2px 8px;">
-              {{ a.action }}
-            </span>
-          </div>
-          <p style="font-size:12px; color:var(--text-muted); margin:0;">
-            {{ a.summary }}
-          </p>
-        </div>
-        {% else %}
-        <p class="empty-state">No alerts yet.</p>
-        {% endfor %}
-      </div>
-      <a href="/alerts" class="view-all-link">View all alerts →</a>
-    </div>
+<!-- ── Live scan feed ─────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-icon">🌊</span>
+    <span class="card-title">Live Scan Feed</span>
+    <span class="att-poll-indicator">● LIVE</span>
+  </div>
+  <div class="card-body" style="padding:0">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Module</th>
+          <th>Reference</th>
+          <th>Risk Score</th>
+          <th>Verdict</th>
+          <th>Scanned</th>
+        </tr>
+      </thead>
+      <tbody id="dbFeedBody">
+        <tr>
+          <td colspan="5" class="att-empty-row">
+            No scans yet — upload an email or scan a URL to get started.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
 
-  </div><!-- /right col -->
-
-</div><!-- /dash-grid -->
 {% endblock %}
 
-{% block extra_scripts %}
-<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
-<script>
-  // Seed the charts with server-rendered initial data
-  // so they appear instantly without waiting for the first poll.
-  initDistChart(
-    {{ stats.get('safe', 0)       | default(0) }},
-    {{ stats.get('suspicious', 0) | default(0) }},
-    {{ stats.get('malicious', 0)  | default(0) }}
-  );
-
-  const initialTrend = {{ [] | tojson }};
-  initTrendChart(initialTrend);
-
-  // Start polling for live updates
-  startDashboardPolling();
-</script>
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/static/js/dashboard.js"></script>
 {% endblock %}

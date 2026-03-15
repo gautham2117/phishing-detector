@@ -1,4 +1,8 @@
-# attachment.py
+# backend/app/routes/attachment.py
+# Phase 6 — Attachment Analysis Flask blueprint
+# url_prefix="/attachments" is set on the Blueprint constructor.
+# All route decorators use RELATIVE paths (no leading /attachments/).
+
 import json
 import requests
 import logging
@@ -17,7 +21,11 @@ def _api():
     return current_app.config.get("FASTAPI_BASE_URL", "http://127.0.0.1:8001")
 
 
-@attachment_bp.route("/attachments", methods=["GET"])
+# ── Page ─────────────────────────────────────────────────────────────────────
+# Previously: @attachment_bp.route("/attachments")  → /attachments/attachments  ✗
+# Fixed:      @attachment_bp.route("/")             → /attachments/             ✓
+
+@attachment_bp.route("/")
 def attachment_page():
     recent = (
         AttachmentScan.query
@@ -28,7 +36,12 @@ def attachment_page():
     return render_template("attachment.html", recent_scans=recent)
 
 
-@attachment_bp.route("/attachments/submit", methods=["POST"])
+# ── Single file scan ──────────────────────────────────────────────────────────
+# Previously: @attachment_bp.route("/attachments/submit")  → /attachments/attachments/submit ✗
+# Fixed:      @attachment_bp.route("/scan")                → /attachments/scan               ✓
+# NOTE: The data-scan-url in attachment.html uses "/attachments/scan"
+
+@attachment_bp.route("/scan", methods=["POST"])
 def submit_attachment():
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
@@ -68,7 +81,9 @@ def submit_attachment():
         return jsonify({"error": str(e)}), 500
 
 
-@attachment_bp.route("/attachments/submit/batch", methods=["POST"])
+# ── Batch scan ────────────────────────────────────────────────────────────────
+
+@attachment_bp.route("/scan/batch", methods=["POST"])
 def submit_attachment_batch():
     uploaded_files = request.files.getlist("files")
     email_scan_id  = request.form.get("email_scan_id", None)
@@ -104,7 +119,9 @@ def submit_attachment_batch():
         return jsonify({"error": str(e)}), 500
 
 
-@attachment_bp.route("/attachments/history", methods=["GET"])
+# ── History ───────────────────────────────────────────────────────────────────
+
+@attachment_bp.route("/history", methods=["GET"])
 def attachment_history():
     scans = (
         AttachmentScan.query
@@ -126,7 +143,9 @@ def attachment_history():
     } for s in scans])
 
 
-@attachment_bp.route("/attachments/detail/<int:scan_id>", methods=["GET"])
+# ── Detail ────────────────────────────────────────────────────────────────────
+
+@attachment_bp.route("/detail/<int:scan_id>", methods=["GET"])
 def attachment_detail(scan_id: int):
     scan = AttachmentScan.query.get_or_404(scan_id)
     return jsonify({

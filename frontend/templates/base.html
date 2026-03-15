@@ -61,6 +61,20 @@
   <div class="content-area">
     {% block content %}{% endblock %}
   </div>
+  <nav class="sidebar-nav">
+  {% if sidebar %}
+    {% for section in sidebar %}
+    <div class="sidebar-section-label">{{ section.section }}</div>
+    {% for item in section.items %}
+    <a href="{{ item.url }}"
+       class="sidebar-link {% if request.path == item.url %}active{% endif %}">
+      <span class="sidebar-link-icon">{{ item.icon }}</span>
+      <span class="sidebar-link-label">{{ item.label }}</span>
+    </a>
+    {% endfor %}
+    {% endfor %}
+  {% endif %}
+</nav>
 
 </main>
 
