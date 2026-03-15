@@ -575,3 +575,135 @@ def _save_network_scan(result: dict) -> Optional[int]:
         logger.error(f"NetworkScan DB save error: {e}")
         db.session.rollback()
         return None
+    
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 4 — Rule engine endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+from backend.modules.rule_engine import (
+    analyze_url_rules, analyze_email_rules, get_all_rules
+)
+
+
+class RuleScanURLRequest(PydanticBase):
+    url:       str
+    submitter: Optional[str] = "anonymous"
+
+
+class RuleScanEmailRequest(PydanticBase):
+    subject:      str          = ""
+    body_text:    str          = ""
+    body_html:    str          = ""
+    urls:         List[dict]   = []
+    submitter:    Optional[str] = "anonymous"
+
+
+@router.post(
+    "/scan/rules/url",
+    summary="Run heuristic rule engine against a URL",
+    tags=["Rule Engine"]
+)
+async def scan_url_rules(request: RuleScanURLRequest):
+    """
+    Apply all 15+ heuristic rules to a URL and return which rules
+    triggered, their severity weights, and the total rule score.
+    """
+    try:
+        result = analyze_url_rules(request.url)
+
+        label  = _score_to_label(result["rule_score"])
+        action = _label_to_action(label)
+
+        return build_response(
+            status="success",
+            risk_score=result["rule_score"],
+            label=label,
+            module_results={"rule_engine": result},
+            explanation=_build_rules_explanation(result),
+            recommended_action=action
+        )
+
+    except Exception as e:
+        logger.error(f"URL rule scan error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.post(
+    "/scan/rules/email",
+    summary="Run heuristic rule engine against email content",
+    tags=["Rule Engine"]
+)
+async def scan_email_rules(request: RuleScanEmailRequest):
+    """
+    Apply email and URL heuristic rules to email subject, body, and
+    embedded URLs. Returns per-rule hits with severity and evidence.
+    """
+    try:
+        result = analyze_email_rules(
+            subject=request.subject,
+            body_text=request.body_text,
+            body_html=request.body_html,
+            urls=request.urls
+        )
+
+        label  = _score_to_label(result["rule_score"])
+        action = _label_to_action(label)
+
+        return build_response(
+            status="success",
+            risk_score=result["rule_score"],
+            label=label,
+            module_results={"rule_engine": result},
+            explanation=_build_rules_explanation(result),
+            recommended_action=action
+        )
+
+    except Exception as e:
+        logger.error(f"Email rule scan error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/rules/list",
+    summary="Return the full list of all heuristic rules",
+    tags=["Rule Engine"]
+)
+async def list_all_rules():
+    """
+    Return metadata for every rule in the registry.
+    Used by the dashboard to populate the full rules checklist.
+    """
+    return {
+        "status": "success",
+        "rules":  get_all_rules(),
+        "total":  len(get_all_rules())
+    }
+
+
+def _build_rules_explanation(result: dict) -> str:
+    """Build a plain-language explanation from rule engine results."""
+    hits = result.get("hits", [])
+    if not hits:
+        return "No heuristic rules triggered — input appears clean."
+
+    critical = [h for h in hits if h.get("severity") == "CRITICAL"]
+    high     = [h for h in hits if h.get("severity") == "HIGH"]
+
+    parts = [f"{len(hits)} rule(s) triggered (score: {result['rule_score']}/100)."]
+
+    if critical:
+        parts.append(
+            f"Critical: {critical[0]['name']}."
+        )
+    elif high:
+        parts.append(
+            f"High severity: {high[0]['name']}."
+        )
+
+    return " ".join(parts)

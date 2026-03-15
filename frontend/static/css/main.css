@@ -804,3 +804,130 @@ select {
 }
 
 .admin-exposure-card strong { color: var(--red); }
+
+/* ── Detection Rules additions ── */
+
+.sev-summary-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.sev-summary-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sev-critical-pill { background: rgba(248,81,73,0.15);  color: var(--red);   }
+.sev-high-pill     { background: rgba(248,81,73,0.10);  color: var(--red);   }
+.sev-medium-pill   { background: rgba(210,153,34,0.15); color: var(--amber); }
+.sev-low-pill      { background: rgba(56,139,253,0.10); color: var(--blue);  }
+
+/* Rule hit card */
+.rule-hit-card {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  border-left: 4px solid;
+}
+
+.rule-hit-card.sev-critical { border-left-color: var(--red);   }
+.rule-hit-card.sev-high     { border-left-color: var(--red);   }
+.rule-hit-card.sev-medium   { border-left-color: var(--amber); }
+.rule-hit-card.sev-low      { border-left-color: var(--blue);  }
+
+.rule-hit-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.rule-hit-name { font-weight: 500; font-size: 14px; flex: 1; }
+
+.sev-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.sev-critical { background: rgba(248,81,73,0.20);  color: var(--red);        }
+.sev-high     { background: rgba(248,81,73,0.14);  color: var(--red);        }
+.sev-medium   { background: rgba(210,153,34,0.18); color: var(--amber);      }
+.sev-low      { background: rgba(56,139,253,0.12); color: var(--blue);       }
+
+.rule-weight-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.rule-detail  { font-size: 12px; color: var(--text-muted); margin: 4px 0; }
+
+.rule-evidence {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 4px 8px;
+  margin-top: 6px;
+  word-break: break-all;
+  color: var(--amber);
+}
+
+/* Passed rules list (compact) */
+.passed-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.passed-rule-row:last-child { border-bottom: none; }
+
+.pass-check {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(63,185,80,0.15);
+  border: 1px solid var(--green);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: var(--green);
+}
+
+/* Full registry rows */
+.rule-registry-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+
+.rule-registry-row:last-child { border-bottom: none; }
+.rule-registry-row.triggered  { background: rgba(248,81,73,0.04); }
+
+.rule-name { font-size: 13px; font-weight: 500; }
+.rule-desc { font-size: 12px; color: var(--text-muted); margin: 5px 0 0; line-height: 1.6; }

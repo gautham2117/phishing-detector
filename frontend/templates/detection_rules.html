@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Detection Rules{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Detection Rules</h1>
+  <span class="last-updated">
+    Last updated: <span id="update-time">—</span>
+  </span>
+  <button class="btn-refresh" onclick="loadAllRules()">Refresh rules</button>
+</div>
+
+<!-- 
+  Hidden data element — passes server-side values to JavaScript
+  without putting any Jinja syntax inside a script block.
+  detection_rules.js reads these with dataset.*
+-->
+<div id="page-data"
+     data-rules-preloaded="{{ 'true' if all_rules else 'false' }}"
+     data-rules-count="{{ all_rules | length }}"
+     style="display:none">
+</div>
+
+<!-- ── URL scan form ── -->
+<div class="card">
+  <h2>Test a URL against all rules</h2>
+  <div class="url-input-row">
+    <input type="text" id="url-input"
+           placeholder="https://paypa1-secure-login.xyz/verify"
+           onkeydown="if(event.key==='Enter') scanUrl()">
+    <button class="btn-primary" onclick="scanUrl()">Run rules</button>
+  </div>
+  <p class="hint">
+    Each triggered rule shows its name, severity weight, and the exact
+    evidence that caused it to fire. Results feed directly into the
+    Risk Scoring Engine.
+  </p>
+</div>
+
+<!-- ── Spinner ── -->
+<div class="spinner-overlay" id="spinner" style="display:none">
+  <div class="spinner"></div>
+  <p>Running heuristic rules...</p>
+</div>
+
+<!-- ── Score result card ── -->
+<div id="result-card" style="display:none">
+
+  <div class="card">
+    <div class="result-header">
+      <div style="flex:1">
+        <div class="url-display" id="res-input">—</div>
+      </div>
+      <div class="risk-badge" id="risk-badge">—</div>
+    </div>
+
+    <!-- Score bar -->
+    <div class="score-bar-container">
+      <div class="score-bar-track">
+        <div class="score-bar-fill" id="score-bar" style="width:0%"></div>
+      </div>
+      <span class="score-number" id="score-num">0</span>
+      <span class="score-label">/ 100</span>
+    </div>
+
+    <!-- Severity summary pills -->
+    <div class="sev-summary-row" id="sev-summary"></div>
+  </div>
+
+  <!-- ── Triggered rules checklist ── -->
+  <div class="card">
+    <h2>
+      Triggered rules
+      <span class="count-badge" id="hit-count">0</span>
+    </h2>
+    <div id="triggered-rules-list">
+      <p class="empty-state">No rules triggered yet.</p>
+    </div>
+  </div>
+
+  <!-- ── Passed rules ── -->
+  <div class="card">
+    <h2>
+      Passed rules
+      <span class="count-badge" id="pass-count">0</span>
+    </h2>
+    <div id="passed-rules-list"></div>
+  </div>
+
+</div>
+
+<!-- ── Full rule registry (always visible) ── -->
+<div class="card">
+  <h2>
+    Full rule registry
+    <span class="count-badge" id="registry-count">
+      {{ all_rules | length }}
+    </span>
+  </h2>
+  <p class="hint" style="margin-bottom:16px;">
+    Every rule below runs on each URL and email scan.
+    Triggered rules are highlighted after a scan.
+  </p>
+
+  <div id="rules-registry">
+    {% if all_rules %}
+      {% for rule in all_rules %}
+      <div class="rule-registry-row" id="reg-{{ rule.rule_id }}">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span class="sev-tag sev-{{ rule.severity | lower }}">
+            {{ rule.severity }}
+          </span>
+          <span class="rule-name">{{ rule.name }}</span>
+          <span class="rule-weight-badge">+{{ rule.weight }} pts</span>
+        </div>
+        <p class="rule-desc">{{ rule.description }}</p>
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="empty-state" id="registry-empty">
+        Loading rules from API...
+      </p>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/detection_rules.js') }}"></script>
+{% endblock %}
