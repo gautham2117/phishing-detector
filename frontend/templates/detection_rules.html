@@ -10,11 +10,6 @@
   <button class="btn-refresh" onclick="loadAllRules()">Refresh rules</button>
 </div>
 
-<!-- 
-  Hidden data element — passes server-side values to JavaScript
-  without putting any Jinja syntax inside a script block.
-  detection_rules.js reads these with dataset.*
--->
 <div id="page-data"
      data-rules-preloaded="{{ 'true' if all_rules else 'false' }}"
      data-rules-count="{{ all_rules | length }}"
@@ -126,6 +121,6 @@
 
 {% endblock %}
 
-{% block extra_scripts %}
-<script src="{{ url_for('static', filename='js/detection_rules.js') }}"></script>
+{% block scripts %}
+<script src="/static/js/detection_rules.js"></script>
 {% endblock %}

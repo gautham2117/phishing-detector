@@ -79,6 +79,6 @@
       "importance": 0.0205
     }
   ],
-  "trained_at": "2026-03-15T09:55:32.801085Z",
+  "trained_at": "2026-03-15T20:53:21.996682Z",
   "model_path": "D:\\PROJECT-1\\phishing-detector\\phishing-detector\\backend\\ml\\models\\rf_url_classifier_v1.pkl"
 }

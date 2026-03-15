@@ -92,7 +92,6 @@
       </div>
       <span class="confidence-label" id="rf-score-label">0%</span>
 
-      <!-- Feature contribution chart -->
       <h3 style="margin-top:16px;">Top features (from last scan)</h3>
       <div id="rf-features">
         <p class="empty-state">Run a scan to see feature contributions.</p>
@@ -134,6 +133,7 @@
 </div>
 {% endblock %}
 
-{% block extra_scripts %}
-<script src="{{ url_for('static', filename='js/ml_classifier.js') }}"></script>
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/static/js/ml_classifier.js"></script>
 {% endblock %}
