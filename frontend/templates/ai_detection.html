@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{% block title %}AI Content Detection — PhishGuard{% endblock %}
+{% block title %}AI Detection — PhishGuard{% endblock %}
 
 {% block content %}
-<!-- Data island — JS reads from here, never from Jinja inside script tags -->
+<!-- Data island — URLs now match /ai/detection/... prefix -->
 <div id="page-data"
-     data-text-url="/ai-detection/scan/text"
-     data-url-url="/ai-detection/scan/url"
-     data-file-url="/ai-detection/scan/file"
-     data-history-url="/ai-detection/history"
+     data-text-url="/ai/detection/scan/text"
+     data-url-url="/ai/detection/scan/url"
+     data-file-url="/ai/detection/scan/file"
+     data-history-url="/ai/detection/history"
      style="display:none"></div>
 
 <div class="page-header">
@@ -29,11 +29,10 @@
   </div>
   <div class="card-body">
 
-    <!-- Tab switcher -->
     <div class="ai-tab-bar">
       <button class="ai-tab active" data-tab="text">✏ Paste Text</button>
-      <button class="ai-tab"       data-tab="url" >🔗 From URL</button>
-      <button class="ai-tab"       data-tab="file">📎 Upload File</button>
+      <button class="ai-tab"        data-tab="url" >🔗 From URL</button>
+      <button class="ai-tab"        data-tab="file">📎 Upload File</button>
     </div>
 
     <!-- Text tab -->
@@ -92,9 +91,9 @@
 
     <div class="card ai-verdict-card">
       <div class="card-body ai-verdict-body">
-        <div class="ai-verdict-badge" id="aiVerdictBadge">—</div>
-        <div class="ai-verdict-prob"  id="aiVerdictProb"></div>
-        <div class="ai-verdict-meta"  id="aiVerdictMeta"></div>
+        <div class="ai-verdict-badge"  id="aiVerdictBadge">—</div>
+        <div class="ai-verdict-prob"   id="aiVerdictProb"></div>
+        <div class="ai-verdict-meta"   id="aiVerdictMeta"></div>
         <div class="ai-verdict-action" id="aiVerdictAction"></div>
       </div>
     </div>
@@ -108,10 +107,10 @@
         <div class="ai-meter-value" id="aiMeterValue">0%</div>
         <div class="ai-meter-track">
           <div class="ai-meter-fill" id="aiMeterFill" style="width:0%"></div>
-          <div class="ai-meter-marker" style="left:45%"
-               title="Mixed threshold (45%)"></div>
-          <div class="ai-meter-marker ai-marker-high" style="left:75%"
-               title="AI threshold (75%)"></div>
+          <div class="ai-meter-marker"
+               style="left:45%" title="Mixed threshold (45%)"></div>
+          <div class="ai-meter-marker ai-marker-high"
+               style="left:75%" title="AI threshold (75%)"></div>
         </div>
         <div class="ai-meter-legend">
           <span class="ai-legend-human">Human</span>
