@@ -292,3 +292,36 @@ class MonitorScanResult(db.Model):
     alert_fired  = db.Column(db.Boolean,  default=False)
     scan_summary = db.Column(db.Text,     default="")
     scanned_at   = db.Column(db.DateTime, default=datetime.utcnow)
+
+class AggregatedRiskScore(db.Model):
+    __tablename__ = "aggregated_risk_scores"
+
+    id               = db.Column(db.Integer, primary_key=True)
+    email_scan_id    = db.Column(db.Integer, nullable=True)
+    url_scan_id      = db.Column(db.Integer, nullable=True)
+    network_scan_id  = db.Column(db.Integer, nullable=True)
+    attachment_id    = db.Column(db.Integer, nullable=True)
+    ai_detection_id  = db.Column(db.Integer, nullable=True)
+    image_scan_id    = db.Column(db.Integer, nullable=True)
+
+    # Individual scores pulled from each table
+    email_score      = db.Column(db.Float, nullable=True)
+    url_score        = db.Column(db.Float, nullable=True)
+    network_score    = db.Column(db.Float, nullable=True)
+    attachment_score = db.Column(db.Float, nullable=True)
+    ai_score         = db.Column(db.Float, nullable=True)
+    image_score      = db.Column(db.Float, nullable=True)
+
+    # Weights applied (stored so result is reproducible)
+    email_weight     = db.Column(db.Float, default=0.20)
+    url_weight       = db.Column(db.Float, default=0.25)
+    network_weight   = db.Column(db.Float, default=0.15)
+    attachment_weight= db.Column(db.Float, default=0.20)
+    ai_weight        = db.Column(db.Float, default=0.10)
+    image_weight     = db.Column(db.Float, default=0.10)
+
+    final_score      = db.Column(db.Float,   default=0.0)
+    verdict          = db.Column(db.String(30), default="UNKNOWN")
+    phases_used      = db.Column(db.Text,    default="[]")  # JSON list
+    breakdown        = db.Column(db.Text,    default="{}")  # JSON dict
+    created_at       = db.Column(db.DateTime, default=datetime.utcnow)

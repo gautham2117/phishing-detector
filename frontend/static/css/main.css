@@ -1538,3 +1538,89 @@ select {
     text-overflow: ellipsis; white-space: nowrap;
     font-size: .82rem; color: var(--text-muted);
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   PHASE 10 — Risk Score Aggregator Styles
+   Append to bottom of main.css
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Input form ──────────────────────────────────────────────────────────── */
+.rs-input-card          { margin-bottom: 20px; }
+.rs-hint                {
+    color: var(--text-muted); font-size: .85rem;
+    margin: 0 0 16px 0; line-height: 1.5;
+}
+.rs-id-grid             {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 14px;
+}
+.rs-id-field            { display: flex; flex-direction: column; gap: 5px; }
+.rs-phase-icon          { margin-right: 5px; }
+.rs-id-input            { width: 100%; }
+
+/* ── Results top row ─────────────────────────────────────────────────────── */
+.rs-top-row             {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 16px; margin-bottom: 16px;
+}
+@media (max-width: 720px) { .rs-top-row { grid-template-columns: 1fr; } }
+
+/* ── Gauge ───────────────────────────────────────────────────────────────── */
+.rs-gauge-body          { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.rs-gauge-wrap          { position: relative; width: 200px; }
+.rs-gauge-svg           { width: 100%; display: block; }
+.rs-gauge-value         {
+    position: absolute; bottom: 8px; left: 50%;
+    transform: translateX(-50%);
+    font-size: 2rem; font-weight: 700; color: var(--text);
+}
+.rs-gauge-label         { font-size: .8rem; color: var(--text-muted); margin-top: -8px; }
+.rs-gauge-phases        { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.rs-phase-pill          {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 14px; padding: 3px 10px;
+    font-size: .75rem; color: var(--text-muted);
+}
+
+/* ── Verdict card ────────────────────────────────────────────────────────── */
+.rs-explanation         {
+    color: var(--text-muted); font-size: .84rem;
+    line-height: 1.6; text-align: center;
+    margin: 8px 0 0 0;
+}
+
+/* ── Per-phase breakdown ─────────────────────────────────────────────────── */
+.rs-breakdown           { display: flex; flex-direction: column; gap: 14px; }
+.rs-breakdown-row       {
+    background: var(--bg3); border-radius: var(--radius);
+    border: 1px solid var(--border); padding: 12px 16px;
+    display: flex; flex-direction: column; gap: 8px;
+}
+.rs-bd-label            { display: flex; align-items: center; gap: 8px; }
+.rs-bd-icon             { font-size: 1.1rem; }
+.rs-bd-name             { font-weight: 600; color: var(--text); font-size: .9rem; }
+.rs-bd-scanid           {
+    margin-left: auto; font-size: .75rem;
+    color: var(--text-muted);
+    background: var(--bg); padding: 2px 8px;
+    border-radius: 10px; border: 1px solid var(--border);
+}
+.rs-bd-bar-wrap         { display: flex; align-items: center; gap: 10px; }
+.rs-bd-bar-bg           {
+    flex: 1; height: 10px; background: var(--bg);
+    border-radius: 6px; overflow: hidden;
+    border: 1px solid var(--border);
+}
+.rs-bd-bar-fill         { height: 100%; border-radius: 6px; transition: width .5s ease; }
+.rs-bd-raw              {
+    font-size: .82rem; font-weight: 700; color: var(--text);
+    min-width: 38px; text-align: right;
+}
+.rs-bd-meta             { display: flex; gap: 16px; }
+.rs-bd-weight,
+.rs-bd-weighted         { font-size: .76rem; color: var(--text-muted); }
+.rs-bd-weighted         { color: var(--blue); }
+
+/* ── History table ───────────────────────────────────────────────────────── */
+.rs-phases-cell         { font-size: 1rem; letter-spacing: 2px; }

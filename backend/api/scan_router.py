@@ -42,6 +42,7 @@ from backend.modules.image_analyzer import analyze_image
 from backend.modules.platform_monitor import (
     scan_target_full, extract_domain, get_due_targets, get_unified_feed
 )
+from backend.modules.risk_engine import aggregate_risk_scores
 
 
 logger = logging.getLogger(__name__)
@@ -1669,3 +1670,192 @@ def _serialize_scan_result(r) -> dict:
         "scan_summary": r.scan_summary,
         "scanned_at":   r.scanned_at.isoformat() + "Z" if r.scanned_at else "",
     }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 10 — Risk Score Aggregator
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AggregateRequest(PydanticBase):
+    email_scan_id:   Optional[int]   = None
+    url_scan_id:     Optional[int]   = None
+    network_scan_id: Optional[int]   = None
+    attachment_id:   Optional[int]   = None
+    ai_detection_id: Optional[int]   = None
+    image_scan_id:   Optional[int]   = None
+    weights:         Optional[dict]  = None
+
+
+@router.post(
+    "/risk/aggregate",
+    summary="Aggregate risk scores from existing scan records",
+    tags=["Risk Score Aggregator"]
+)
+async def aggregate_risk(req: AggregateRequest):
+    """
+    Accept up to 6 scan IDs (one per phase), pull their scores
+    from the DB, apply configurable weights, and return a
+    unified risk score with per-phase breakdown.
+    """
+    try:
+        ids = [
+            req.email_scan_id, req.url_scan_id,
+            req.network_scan_id, req.attachment_id,
+            req.ai_detection_id, req.image_scan_id,
+        ]
+        if not any(ids):
+            raise HTTPException(
+                status_code=400,
+                detail="At least one scan ID must be provided."
+            )
+
+        result = aggregate_risk_scores(
+            email_scan_id   = req.email_scan_id,
+            url_scan_id     = req.url_scan_id,
+            network_scan_id = req.network_scan_id,
+            attachment_id   = req.attachment_id,
+            ai_detection_id = req.ai_detection_id,
+            image_scan_id   = req.image_scan_id,
+            weights         = req.weights,
+        )
+
+        if result.get("error"):
+            return JSONResponse(
+                status_code=422,
+                content=error_response(result["error"])
+            )
+
+        verdict = result["verdict"]
+        label   = {
+            "CLEAN":     "SAFE",
+            "SUSPICIOUS":"SUSPICIOUS",
+            "MALICIOUS": "MALICIOUS",
+        }.get(verdict, "SUSPICIOUS")
+
+        db_id = _save_aggregated_score(result, req)
+
+        return build_response(
+            status="success",
+            risk_score=result["final_score"],
+            label=label,
+            module_results={"risk_aggregator": result},
+            explanation=result["explanation"],
+            recommended_action=result["action"],
+        ) | {"scan_id": db_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Risk aggregation error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/risk/history",
+    summary="List past aggregated risk score records",
+    tags=["Risk Score Aggregator"]
+)
+async def risk_history(limit: int = 20):
+    try:
+        from backend.app.models import AggregatedRiskScore
+        rows = (
+            AggregatedRiskScore.query
+            .order_by(AggregatedRiskScore.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return {
+            "status":  "success",
+            "records": [_serialize_agg(r) for r in rows],
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content=error_response(str(e)))
+
+
+@router.get(
+    "/risk/history/{record_id}",
+    summary="Get full detail of one aggregated risk record",
+    tags=["Risk Score Aggregator"]
+)
+async def risk_detail(record_id: int):
+    try:
+        from backend.app.models import AggregatedRiskScore
+        r = db.session.get(AggregatedRiskScore, record_id)
+        if not r:
+            raise HTTPException(status_code=404, detail="Record not found.")
+        return {"status": "success", "record": _serialize_agg(r, full=True)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content=error_response(str(e)))
+
+
+# ── Phase 10 helpers ──────────────────────────────────────────────────────────
+
+def _save_aggregated_score(result: dict, req) -> Optional[int]:
+    try:
+        import json as _json
+        import datetime
+        from backend.app.models import AggregatedRiskScore
+
+        bd = result.get("breakdown", {})
+        record = AggregatedRiskScore(
+            email_scan_id    = req.email_scan_id,
+            url_scan_id      = req.url_scan_id,
+            network_scan_id  = req.network_scan_id,
+            attachment_id    = req.attachment_id,
+            ai_detection_id  = req.ai_detection_id,
+            image_scan_id    = req.image_scan_id,
+            email_score      = bd.get("email",      {}).get("raw"),
+            url_score        = bd.get("url",        {}).get("raw"),
+            network_score    = bd.get("network",    {}).get("raw"),
+            attachment_score = bd.get("attachment", {}).get("raw"),
+            ai_score         = bd.get("ai",         {}).get("raw"),
+            image_score      = bd.get("image",      {}).get("raw"),
+            email_weight     = result["weights_used"].get("email",      0.20),
+            url_weight       = result["weights_used"].get("url",        0.25),
+            network_weight   = result["weights_used"].get("network",    0.15),
+            attachment_weight= result["weights_used"].get("attachment", 0.20),
+            ai_weight        = result["weights_used"].get("ai",         0.10),
+            image_weight     = result["weights_used"].get("image",      0.10),
+            final_score      = result["final_score"],
+            verdict          = result["verdict"],
+            phases_used      = _json.dumps(result["phases_used"]),
+            breakdown        = _json.dumps(result["breakdown"]),
+            created_at       = datetime.datetime.utcnow(),
+        )
+        db.session.add(record)
+        db.session.commit()
+        return record.id
+    except Exception as e:
+        logger.error(f"AggregatedRiskScore DB save error: {e}")
+        db.session.rollback()
+        return None
+
+
+def _serialize_agg(r, full: bool = False) -> dict:
+    import json as _json
+    base = {
+        "id":            r.id,
+        "final_score":   r.final_score,
+        "verdict":       r.verdict,
+        "phases_used":   _json.loads(r.phases_used or "[]"),
+        "email_scan_id": r.email_scan_id,
+        "url_scan_id":   r.url_scan_id,
+        "network_scan_id":r.network_scan_id,
+        "attachment_id": r.attachment_id,
+        "ai_detection_id":r.ai_detection_id,
+        "image_scan_id": r.image_scan_id,
+        "email_score":   r.email_score,
+        "url_score":     r.url_score,
+        "network_score": r.network_score,
+        "attachment_score":r.attachment_score,
+        "ai_score":      r.ai_score,
+        "image_score":   r.image_score,
+        "created_at":    r.created_at.isoformat() + "Z" if r.created_at else "",
+    }
+    if full:
+        base["breakdown"] = _json.loads(r.breakdown or "{}")
+    return base
