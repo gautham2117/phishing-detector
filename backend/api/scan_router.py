@@ -55,6 +55,14 @@ from backend.app.models    import (
     ExtensionScan
 )
 from backend.app.utils.response import build_response, error_response
+from backend.modules.system_health import (
+    check_module_health,
+    get_system_metrics,
+    get_db_stats,
+    get_requests_per_minute,
+    get_request_rate_history,
+    get_migration_plan,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1695,6 +1703,105 @@ async def extension_status():
         "version": "1.0.0",
         "message": "PhishGuard backend is running.",
     }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 15 — System Architecture & Health
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/architecture/health",
+    summary="Live health check for all module endpoints",
+    tags=["System Architecture"]
+)
+async def architecture_health():
+    """
+    Concurrently pings all module endpoints and returns
+    Online / Degraded / Offline status with latency.
+    """
+    try:
+        results = check_module_health()
+        online   = sum(1 for r in results if r["status"] == "online")
+        degraded = sum(1 for r in results if r["status"] == "degraded")
+        offline  = sum(1 for r in results if r["status"] == "offline")
+        total    = len(results)
+
+        overall = "online"
+        if offline == total:
+            overall = "offline"
+        elif offline > 0 or degraded > 0:
+            overall = "degraded"
+
+        return {
+            "status":  "success",
+            "overall": overall,
+            "summary": {
+                "online":   online,
+                "degraded": degraded,
+                "offline":  offline,
+                "total":    total,
+            },
+            "modules": results,
+        }
+    except Exception as e:
+        logger.error(f"Health check error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/architecture/metrics",
+    summary="CPU, memory, request rate, and DB stats",
+    tags=["System Architecture"]
+)
+async def architecture_metrics():
+    """
+    Returns system metrics, DB table stats, and request rate.
+    Polled every 5 seconds by the dashboard.
+    """
+    try:
+        sys_metrics  = get_system_metrics()
+        rate_history = get_request_rate_history(buckets=10)
+        rpm          = get_requests_per_minute()
+
+        with _flask_ctx():
+            db_stats = get_db_stats()
+
+        return {
+            "status":          "success",
+            "system":          sys_metrics,
+            "requests_per_min":rpm,
+            "rate_history":    rate_history,
+            "database":        db_stats,
+            "timestamp":       datetime.datetime.utcnow().isoformat() + "Z",
+        }
+    except Exception as e:
+        logger.error(f"Metrics error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/architecture/migration-plan",
+    summary="SQLite to PostgreSQL migration plan",
+    tags=["System Architecture"]
+)
+async def architecture_migration_plan():
+    """
+    Returns the full structured SQLite → PostgreSQL migration plan
+    with Alembic schema versioning workflow.
+    """
+    try:
+        plan = get_migration_plan()
+        return {"status": "success", "plan": plan}
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

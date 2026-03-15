@@ -313,7 +313,7 @@ def _recent_alerts(limit: int = 5) -> list:
         "input_type":  a.input_type or "—",
         "severity":    a.severity or "Low",
         "risk_score":  round(a.risk_score or 0, 1),
-        "summary":     (a.bart_summary or "No summary available.")[:120],
+        "summary": (a.threat_summary or "No summary available.")[:120],
         "action":      a.recommended_action or "WARN",
         "created_at":  a.created_at.isoformat() if a.created_at else ""
     } for a in alerts]

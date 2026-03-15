@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}System Architecture — PhishGuard{% endblock %}
+
+{% block content %}
+<!-- Data island -->
+<div id="page-data"
+     data-health-url="/architecture/health"
+     data-metrics-url="/architecture/metrics"
+     data-plan-url="/architecture/migration-plan"
+     style="display:none"></div>
+
+<div class="page-header">
+  <h1 class="page-title">
+    <span class="title-icon">🏗</span>
+    System Architecture
+  </h1>
+  <p class="page-subtitle">
+    Live module health · CPU &amp; memory · Request rate ·
+    Database stats · PostgreSQL migration plan
+  </p>
+</div>
+
+<!-- ── Overall system status banner ──────────────────────────────────────── -->
+<div class="arc-overall-banner" id="arcOverallBanner">
+  <span class="arc-overall-dot" id="arcOverallDot"></span>
+  <span class="arc-overall-label" id="arcOverallLabel">Checking system status…</span>
+  <span class="arc-overall-summary" id="arcOverallSummary"></span>
+  <span class="att-poll-indicator" style="margin-left:auto">● LIVE</span>
+</div>
+
+<!-- ── Metrics row ────────────────────────────────────────────────────────── -->
+<div class="arc-metrics-row">
+
+  <div class="card arc-metric-card">
+    <div class="arc-metric-icon">⚡</div>
+    <div class="arc-metric-val" id="arcCpu">—</div>
+    <div class="arc-metric-lbl">CPU Usage</div>
+  </div>
+
+  <div class="card arc-metric-card">
+    <div class="arc-metric-icon">💾</div>
+    <div class="arc-metric-val" id="arcMemMb">—</div>
+    <div class="arc-metric-lbl">Memory (MB)</div>
+  </div>
+
+  <div class="card arc-metric-card">
+    <div class="arc-metric-icon">📊</div>
+    <div class="arc-metric-val" id="arcRpm">—</div>
+    <div class="arc-metric-lbl">Req / min</div>
+  </div>
+
+  <div class="card arc-metric-card">
+    <div class="arc-metric-icon">🗄</div>
+    <div class="arc-metric-val" id="arcDbSize">—</div>
+    <div class="arc-metric-lbl">DB Size (MB)</div>
+  </div>
+
+  <div class="card arc-metric-card">
+    <div class="arc-metric-icon">📋</div>
+    <div class="arc-metric-val" id="arcDbRows">—</div>
+    <div class="arc-metric-lbl">Total DB Rows</div>
+  </div>
+
+</div>
+
+<!-- ── Request rate graph ──────────────────────────────────────────────────── -->
+<div class="card arc-chart-card">
+  <div class="card-header">
+    <span class="card-icon">📈</span>
+    <span class="card-title">Request Rate — Last 60 Seconds</span>
+  </div>
+  <div class="card-body">
+    <canvas id="arcRateChart" height="70"></canvas>
+  </div>
+</div>
+
+<!-- ── Module health grid ─────────────────────────────────────────────────── -->
+<div class="card arc-health-card">
+  <div class="card-header">
+    <span class="card-icon">🔬</span>
+    <span class="card-title">Module Health Status</span>
+  </div>
+  <div class="card-body">
+    <div class="arc-health-grid" id="arcHealthGrid">
+      <p class="att-empty-note" style="padding:12px">Running health checks…</p>
+    </div>
+  </div>
+</div>
+
+<!-- ── Database table stats ───────────────────────────────────────────────── -->
+<div class="card arc-db-card">
+  <div class="card-header">
+    <span class="card-icon">🗄</span>
+    <span class="card-title">Database Table Statistics</span>
+  </div>
+  <div class="card-body" style="padding:0">
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Table</th>
+            <th>Row Count</th>
+            <th>Phase</th>
+          </tr>
+        </thead>
+        <tbody id="arcDbBody">
+          <tr>
+            <td colspan="3" class="att-empty-row">Loading…</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ── PostgreSQL Migration Plan ──────────────────────────────────────────── -->
+<div class="card arc-plan-card" style="margin-top:20px">
+  <div class="card-header">
+    <span class="card-icon">🐘</span>
+    <span class="card-title">SQLite → PostgreSQL Migration Plan</span>
+    <button class="pm-close-btn" id="arcPlanToggle">Show Plan</button>
+  </div>
+  <div id="arcPlanBody" style="display:none">
+    <div class="card-body">
+      <div id="arcPlanSteps"></div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/static/js/architecture.js"></script>
+{% endblock %}
