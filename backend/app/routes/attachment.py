@@ -1,146 +1,223 @@
-"""
-backend/app/routes/attachment.py
-Phase 6 — Attachment Analysis Flask blueprint
-Proxies analysis to FastAPI; saves results to AttachmentScan table.
-"""
+# attachment.py
+# Flask Blueprint for the Attachment Analysis dashboard page.
+# Phase 6 — File & Attachment Analysis Module.
+#
+# Responsibilities:
+#   - Render the Attachment Analysis dashboard page
+#   - Proxy file uploads from the browser to FastAPI /api/scan/file
+#   - Serve scan history from the AttachmentScan database table
+#   - Handle both single file and batch file uploads
 
 import json
-import datetime
-
 import requests
+import logging
 from flask import (
     Blueprint, render_template, request,
     jsonify, current_app
 )
-
+from backend.app.models import AttachmentScan
 from backend.app.database import db
-from backend.app.models   import AttachmentScan
 
-bp = Blueprint("attachment_bp", __name__, url_prefix="/attachments")
+logger = logging.getLogger(__name__)
 
-FASTAPI_FILE_URL = "http://127.0.0.1:8001/api/scan/file"
-PROXY_TIMEOUT    = 30   # file uploads may be larger → longer timeout
-
-
-# ── Page render ────────────────────────────────────────────────────────────────
-
-@bp.route("/")
-def index():
-    return render_template("attachment.html")
+# Blueprint variable name must match what __init__.py imports
+attachment_bp = Blueprint("attachment_bp", __name__)
 
 
-# ── File scan endpoint ─────────────────────────────────────────────────────────
+def _api():
+    """Return the FastAPI base URL from Flask config."""
+    return current_app.config.get("FASTAPI_BASE_URL", "http://127.0.0.1:8001")
 
-@bp.route("/scan", methods=["POST"])
-def scan_attachment():
-    uploaded = request.files.get("file")
-    if not uploaded or not uploaded.filename:
-        return jsonify({"status": "error", "message": "No file provided"}), 400
 
-    filename      = uploaded.filename
-    file_bytes    = uploaded.read()
-    email_scan_id = request.form.get("email_scan_id", "")
+# ─────────────────────────────────────────────────────────────────────────────
+# Dashboard page
+# ─────────────────────────────────────────────────────────────────────────────
 
-    # ── Forward to FastAPI ──
+@attachment_bp.route("/attachments", methods=["GET"])
+def attachment_page():
+    """
+    Render the Attachment Analysis dashboard page.
+    Pre-loads the 15 most recent attachment scans for the history table.
+    """
+    recent = (
+        AttachmentScan.query
+        .order_by(AttachmentScan.scanned_at.desc())
+        .limit(15)
+        .all()
+    )
+    return render_template("attachment.html", recent_scans=recent)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Single file upload proxy
+# ─────────────────────────────────────────────────────────────────────────────
+
+@attachment_bp.route("/attachments/submit", methods=["POST"])
+def submit_attachment():
+    """
+    Proxy a single file upload to FastAPI /api/scan/file.
+    Called by the attachment dashboard's upload form.
+
+    Accepts multipart/form-data with:
+      - file:          the attachment file
+      - email_scan_id: optional int linking to a parent EmailScan
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided in the request"}), 400
+
+    upload_file   = request.files["file"]
+    email_scan_id = request.form.get("email_scan_id", None)
+
+    if upload_file.filename == "":
+        return jsonify({"error": "No file selected"}), 400
+
     try:
-        form_data = {}
+        # Forward the file to FastAPI using requests
+        # requests.post with files= handles multipart encoding automatically
+        files_payload = {
+            "file": (
+                upload_file.filename,
+                upload_file.read(),
+                upload_file.content_type or "application/octet-stream"
+            )
+        }
+
+        data_payload = {}
         if email_scan_id:
-            form_data["email_scan_id"] = email_scan_id
+            data_payload["email_scan_id"] = email_scan_id
 
         resp = requests.post(
-            FASTAPI_FILE_URL,
-            files={"file": (filename, file_bytes, uploaded.content_type or "application/octet-stream")},
-            data=form_data,
-            timeout=PROXY_TIMEOUT,
+            f"{_api()}/api/scan/file",
+            files=files_payload,
+            data=data_payload,
+            # File analysis with YARA + entropy can take time
+            timeout=90
         )
-        resp.raise_for_status()
-        api_data = resp.json()
-    except requests.exceptions.Timeout:
-        return jsonify({"status": "error", "message": "Analysis service timed out"}), 504
-    except Exception as ex:
-        return jsonify({"status": "error", "message": f"FastAPI error: {str(ex)[:120]}"}), 502
+        return jsonify(resp.json()), resp.status_code
 
-    # ── Persist to DB ──
-    try:
-        mod = api_data.get("module_results", {})
-        hashes = mod.get("hashes", {})
-
-        record = AttachmentScan(
-            email_id     = int(email_scan_id) if email_scan_id and email_scan_id.isdigit() else None,
-            filename     = filename,
-            file_type    = mod.get("file_type", ""),
-            md5          = hashes.get("md5", ""),
-            sha256       = hashes.get("sha256", ""),
-            file_size    = mod.get("file_size", 0),
-            entropy      = mod.get("entropy", 0.0),
-            yara_matches = json.dumps(mod.get("yara_matches", [])),
-            static_finds = json.dumps(mod.get("suspicious_strings", [])),
-            verdict      = mod.get("verdict", "CLEAN"),
-            scanned_at   = datetime.datetime.utcnow(),
-        )
-        db.session.add(record)
-        db.session.commit()
-        api_data["db_id"] = record.id
-    except Exception as db_err:
-        db.session.rollback()
-        current_app.logger.error("AttachmentScan DB save failed: %s", db_err)
-        api_data["db_id"] = None
-
-    return jsonify(api_data)
-
-
-# ── History endpoint (polled by JS every 5 s) ──────────────────────────────────
-
-@bp.route("/history")
-def history():
-    try:
-        limit   = int(request.args.get("limit", 20))
-        records = (
-            AttachmentScan.query
-            .order_by(AttachmentScan.scanned_at.desc())
-            .limit(limit)
-            .all()
-        )
-        rows = []
-        for r in records:
-            rows.append({
-                "id":         r.id,
-                "filename":   r.filename,
-                "file_type":  r.file_type,
-                "md5":        r.md5,
-                "sha256":     r.sha256,
-                "file_size":  r.file_size,
-                "entropy":    r.entropy,
-                "verdict":    r.verdict,
-                "yara_matches": json.loads(r.yara_matches) if r.yara_matches else [],
-                "static_finds": json.loads(r.static_finds) if r.static_finds else [],
-                "scanned_at": r.scanned_at.isoformat() + "Z" if r.scanned_at else "",
-                "email_id":   r.email_id,
-            })
-        return jsonify({"status": "success", "scans": rows})
-    except Exception as ex:
-        return jsonify({"status": "error", "message": str(ex)}), 500
-
-
-# ── Single scan detail ─────────────────────────────────────────────────────────
-
-@bp.route("/detail/<int:scan_id>")
-def detail(scan_id):
-    try:
-        r = AttachmentScan.query.get_or_404(scan_id)
+    except requests.exceptions.ConnectionError:
         return jsonify({
-            "id":           r.id,
-            "filename":     r.filename,
-            "file_type":    r.file_type,
-            "md5":          r.md5,
-            "sha256":       r.sha256,
-            "file_size":    r.file_size,
-            "entropy":      r.entropy,
-            "verdict":      r.verdict,
-            "yara_matches": json.loads(r.yara_matches) if r.yara_matches else [],
-            "static_finds": json.loads(r.static_finds) if r.static_finds else [],
-            "scanned_at":   r.scanned_at.isoformat() + "Z" if r.scanned_at else "",
-            "email_id":     r.email_id,
-        })
-    except Exception as ex:
-        return jsonify({"status": "error", "message": str(ex)}), 500
+            "error": "Cannot connect to FastAPI service. Is it running on port 8001?"
+        }), 503
+    except requests.exceptions.Timeout:
+        return jsonify({
+            "error": "File analysis timed out. Large files may take longer."
+        }), 504
+    except Exception as e:
+        logger.error(f"Attachment submit proxy error: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch file upload proxy
+# ─────────────────────────────────────────────────────────────────────────────
+
+@attachment_bp.route("/attachments/submit/batch", methods=["POST"])
+def submit_attachment_batch():
+    """
+    Proxy multiple file uploads to FastAPI /api/scan/file/batch.
+    Called when an email scan has multiple attachments to analyze.
+
+    Accepts multipart/form-data with:
+      - files:          multiple file fields
+      - email_scan_id:  optional int linking to parent EmailScan
+    """
+    uploaded_files = request.files.getlist("files")
+    email_scan_id  = request.form.get("email_scan_id", None)
+
+    if not uploaded_files:
+        return jsonify({"error": "No files provided"}), 400
+
+    if len(uploaded_files) > 10:
+        return jsonify({"error": "Maximum 10 files per batch"}), 400
+
+    try:
+        # Build multipart payload with all files
+        files_payload = [
+            (
+                "files",
+                (
+                    f.filename,
+                    f.read(),
+                    f.content_type or "application/octet-stream"
+                )
+            )
+            for f in uploaded_files
+            if f.filename
+        ]
+
+        data_payload = {}
+        if email_scan_id:
+            data_payload["email_scan_id"] = email_scan_id
+
+        resp = requests.post(
+            f"{_api()}/api/scan/file/batch",
+            files=files_payload,
+            data=data_payload,
+            timeout=180
+        )
+        return jsonify(resp.json()), resp.status_code
+
+    except requests.exceptions.Timeout:
+        return jsonify({"error": "Batch file analysis timed out"}), 504
+    except requests.exceptions.ConnectionError:
+        return jsonify({"error": "Cannot connect to FastAPI service"}), 503
+    except Exception as e:
+        logger.error(f"Batch attachment proxy error: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# History endpoint — polled every 5 seconds by the dashboard JS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@attachment_bp.route("/attachments/history", methods=["GET"])
+def attachment_history():
+    """
+    Return the 20 most recent attachment scans as JSON.
+    Called by attachment.js every 5 seconds for live table updates.
+    """
+    scans = (
+        AttachmentScan.query
+        .order_by(AttachmentScan.scanned_at.desc())
+        .limit(20)
+        .all()
+    )
+    return jsonify([{
+        "id":           s.id,
+        "filename":     s.filename,
+        "file_type":    s.file_type,
+        "md5":          s.md5,
+        "sha256":       s.sha256,
+        "file_size":    s.file_size,
+        "entropy":      s.entropy,
+        "yara_matches": json.loads(s.yara_matches or "[]"),
+        "verdict":      s.verdict,
+        "scanned_at":   s.scanned_at.isoformat() if s.scanned_at else ""
+    } for s in scans])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Detail endpoint — returns full data for one scan
+# ─────────────────────────────────────────────────────────────────────────────
+
+@attachment_bp.route("/attachments/detail/<int:scan_id>", methods=["GET"])
+def attachment_detail(scan_id: int):
+    """
+    Return the full analysis data for a specific attachment scan.
+    Used by the detail drawer on the dashboard page.
+    """
+    scan = AttachmentScan.query.get_or_404(scan_id)
+    return jsonify({
+        "id":           scan.id,
+        "filename":     scan.filename,
+        "file_type":    scan.file_type,
+        "md5":          scan.md5,
+        "sha256":       scan.sha256,
+        "file_size":    scan.file_size,
+        "entropy":      scan.entropy,
+        "yara_matches": json.loads(scan.yara_matches or "[]"),
+        "static_finds": json.loads(scan.static_finds or "[]"),
+        "verdict":      scan.verdict,
+        "scanned_at":   scan.scanned_at.isoformat() if scan.scanned_at else ""
+    })

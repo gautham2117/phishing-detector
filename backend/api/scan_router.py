@@ -1,8 +1,10 @@
-# backend/api/scan_router.py
-# FastAPI route handlers for all scan endpoints.
-# Covers Phase 1 (email), Phase 2 (URL), Phase 3 (network),
-#         Phase 4 (rule engine), Phase 5 (ML classifier),
-#         Phase 6 (file / attachment analysis).
+# scan_router.py
+# FastAPI route handlers for all scan endpoints — Phases 1 through 6.
+# Every endpoint follows the same pattern:
+#   1. Validate input (Pydantic)
+#   2. Call the relevant module
+#   3. Save results to database
+#   4. Return standardized JSON response via build_response()
 
 import json
 import logging
@@ -13,23 +15,25 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel as PydanticBase
 
-from backend.modules.email_parser       import parse_email
-from backend.modules.url_intelligence   import analyze_url, analyze_url_batch
-from backend.modules.network_scanner    import scan_target, is_demo_target
-from backend.modules.rule_engine        import (
+# ── Module imports ────────────────────────────────────────────────────────────
+from backend.modules.email_parser import parse_email
+from backend.modules.url_intelligence import analyze_url, analyze_url_batch
+from backend.modules.network_scanner import scan_target, is_demo_target
+from backend.modules.rule_engine import (
     analyze_url_rules, analyze_email_rules, get_all_rules
 )
-from backend.modules.ml_url_classifier  import classify_url, classify_url_batch
-from backend.modules.file_analyzer      import analyze_file          # ← Phase 6
+from backend.modules.ml_url_classifier import classify_url, classify_url_batch
+from backend.modules.file_analyzer import analyze_file
 
-from backend.app.database  import db
-from backend.app.models    import (
-    EmailScan, URLScan, NetworkScan, PortResult, AttachmentScan   # ← Phase 6
+# ── DB + response helpers ─────────────────────────────────────────────────────
+from backend.app.database import db
+from backend.app.models import (
+    EmailScan, URLScan, NetworkScan,
+    PortResult, AttachmentScan
 )
 from backend.app.utils.response import build_response, error_response
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
 
@@ -61,16 +65,16 @@ class NetworkScanRequest(PydanticBase):
 
 
 class RuleScanURLRequest(PydanticBase):
-    url:       str
-    submitter: Optional[str] = "anonymous"
+    url:        str
+    submitter:  Optional[str] = "anonymous"
 
 
 class RuleScanEmailRequest(PydanticBase):
-    subject:      str          = ""
-    body_text:    str          = ""
-    body_html:    str          = ""
-    urls:         List[dict]   = []
-    submitter:    Optional[str] = "anonymous"
+    subject:    str          = ""
+    body_text:  str          = ""
+    body_html:  str          = ""
+    urls:       List[dict]   = []
+    submitter:  Optional[str] = "anonymous"
 
 
 class MLScanRequest(PydanticBase):
@@ -81,18 +85,18 @@ class MLScanRequest(PydanticBase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 1 — Email scanning
+# PHASE 1 — Email scanning
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/scan/email",
-    summary="Scan a raw email text for phishing",
-    tags=["Email Scanning"]
+    summary="Scan raw email text for phishing",
+    tags=["Phase 1 — Email"]
 )
 async def scan_email_text(request: EmailScanRequest):
     """
-    Accept raw email text, parse it, run DistilBERT,
-    and return a structured risk result.
+    Accept raw email text, parse all headers/body/URLs/attachments,
+    run DistilBERT classification, and return a structured risk result.
     """
     try:
         parsed     = parse_email(request.raw_email)
@@ -135,14 +139,13 @@ async def scan_email_text(request: EmailScanRequest):
 @router.post(
     "/scan/email/upload",
     summary="Upload and scan a .eml file",
-    tags=["Email Scanning"]
+    tags=["Phase 1 — Email"]
 )
 async def scan_email_file(
     file:      UploadFile    = File(...),
     submitter: Optional[str] = Form(default="anonymous")
 ):
     """Accept a .eml file upload and run the full parsing + ML pipeline."""
-
     if not file.filename.endswith(".eml"):
         raise HTTPException(
             status_code=400,
@@ -153,7 +156,6 @@ async def scan_email_file(
 
     if len(file_bytes) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
     if len(file_bytes) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 10 MB).")
 
@@ -162,8 +164,9 @@ async def scan_email_file(
         risk_score = _calculate_phase1_risk(parsed)
         label      = _score_to_label(risk_score)
         action     = _label_to_action(label)
-        scan_id    = _save_email_scan(parsed, risk_score, label,
-                                      filename=file.filename)
+        scan_id    = _save_email_scan(
+            parsed, risk_score, label, filename=file.filename
+        )
 
         return build_response(
             status="success",
@@ -190,23 +193,22 @@ async def scan_email_file(
         ) | {"scan_id": scan_id}
 
     except Exception as e:
-        logger.error(f"EML upload scan error: {e}", exc_info=True)
+        logger.error(f"EML upload error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 2 — URL scanning
+# PHASE 2 — URL intelligence
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/scan/url",
-    summary="Run full intelligence analysis on a URL",
-    tags=["URL Scanning"]
+    summary="Full intelligence analysis on a URL",
+    tags=["Phase 2 — URL"]
 )
 async def scan_url(request: URLScanRequest):
     """
-    Run WHOIS → SSL → IP/Geo → DNS → Redirects → BERT model
-    against a single URL and return a structured risk result.
+    WHOIS → SSL → IP/Geo → DNS → Redirects → BERT model → risk score.
     """
     try:
         result  = analyze_url(request.url)
@@ -231,29 +233,21 @@ async def scan_url(request: URLScanRequest):
 
 @router.post(
     "/scan/url/batch",
-    summary="Scan multiple URLs (e.g. all URLs from one email)",
-    tags=["URL Scanning"]
+    summary="Scan multiple URLs from one email",
+    tags=["Phase 2 — URL"]
 )
 async def scan_url_batch(
-    urls: List[str],
+    urls:          List[str],
     email_scan_id: Optional[int] = Query(default=None)
 ):
-    """
-    Analyze a list of URLs in one request.
-    Domains are deduplicated to avoid redundant WHOIS/DNS lookups.
-    """
+    """Analyze a list of URLs — deduplicates by domain to avoid redundant lookups."""
     if not urls:
         raise HTTPException(status_code=400, detail="URL list is empty.")
-
     if len(urls) > 50:
-        raise HTTPException(
-            status_code=400,
-            detail="Batch limit is 50 URLs per request."
-        )
+        raise HTTPException(status_code=400, detail="Batch limit is 50 URLs.")
 
     try:
         results = analyze_url_batch(urls)
-
         for result in results:
             _save_url_scan(result, email_id=email_scan_id)
 
@@ -275,13 +269,13 @@ async def scan_url_batch(
             },
             explanation=(
                 f"Analyzed {len(results)} URL(s). "
-                f"Highest risk score: {max_score:.1f}/100."
+                f"Highest risk: {max_score:.1f}/100."
             ),
             recommended_action=_label_to_action(max_label)
         )
 
     except Exception as e:
-        logger.error(f"Batch URL scan error: {e}", exc_info=True)
+        logger.error(f"Batch URL error: {e}", exc_info=True)
         return JSONResponse(
             status_code=500,
             content=error_response(str(e))
@@ -289,21 +283,18 @@ async def scan_url_batch(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 3 — Network scanning
+# PHASE 3 — Network scanning
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/scan/network",
-    summary="Run an Nmap port scan against a target domain",
-    tags=["Network Scanning"]
+    summary="Nmap port scan against a target domain",
+    tags=["Phase 3 — Network"]
 )
 async def scan_network(request: NetworkScanRequest):
     """
-    Run a network scan against a domain or IP address.
-
-    Ethics gate: only demo/allowlisted targets are scanned without
-    additional consent. For any other target set consent_confirmed=True
-    AND have SCAN_AUTHORIZED=1 in your .env file.
+    Ethics gate → Nmap scan → port classification → risk level.
+    Only demo/allowlisted targets scan without consent_confirmed=True.
     """
     try:
         result  = scan_target(
@@ -338,23 +329,19 @@ async def scan_network(request: NetworkScanRequest):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 4 — Rule engine endpoints
+# PHASE 4 — Rule engine
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/scan/rules/url",
     summary="Run heuristic rule engine against a URL",
-    tags=["Rule Engine"]
+    tags=["Phase 4 — Rules"]
 )
 async def scan_url_rules(request: RuleScanURLRequest):
-    """
-    Apply all 15+ heuristic rules to a URL and return which rules
-    triggered, their severity weights, and the total rule score.
-    """
+    """Apply all 18 heuristic rules to a URL and return triggered rule hits."""
     try:
         result = analyze_url_rules(request.url)
         label  = _score_to_label(result["rule_score"])
-        action = _label_to_action(label)
 
         return build_response(
             status="success",
@@ -362,7 +349,7 @@ async def scan_url_rules(request: RuleScanURLRequest):
             label=label,
             module_results={"rule_engine": result},
             explanation=_build_rules_explanation(result),
-            recommended_action=action
+            recommended_action=_label_to_action(label)
         )
 
     except Exception as e:
@@ -376,13 +363,10 @@ async def scan_url_rules(request: RuleScanURLRequest):
 @router.post(
     "/scan/rules/email",
     summary="Run heuristic rule engine against email content",
-    tags=["Rule Engine"]
+    tags=["Phase 4 — Rules"]
 )
 async def scan_email_rules(request: RuleScanEmailRequest):
-    """
-    Apply email and URL heuristic rules to email subject, body, and
-    embedded URLs. Returns per-rule hits with severity and evidence.
-    """
+    """Apply email and URL heuristic rules to email subject, body, and URLs."""
     try:
         result = analyze_email_rules(
             subject=request.subject,
@@ -390,8 +374,7 @@ async def scan_email_rules(request: RuleScanEmailRequest):
             body_html=request.body_html,
             urls=request.urls
         )
-        label  = _score_to_label(result["rule_score"])
-        action = _label_to_action(label)
+        label = _score_to_label(result["rule_score"])
 
         return build_response(
             status="success",
@@ -399,7 +382,7 @@ async def scan_email_rules(request: RuleScanEmailRequest):
             label=label,
             module_results={"rule_engine": result},
             explanation=_build_rules_explanation(result),
-            recommended_action=action
+            recommended_action=_label_to_action(label)
         )
 
     except Exception as e:
@@ -412,32 +395,32 @@ async def scan_email_rules(request: RuleScanEmailRequest):
 
 @router.get(
     "/rules/list",
-    summary="Return the full list of all heuristic rules",
-    tags=["Rule Engine"]
+    summary="Return full list of all heuristic rules",
+    tags=["Phase 4 — Rules"]
 )
 async def list_all_rules():
     """Return metadata for every rule in the registry."""
+    rules = get_all_rules()
     return {
         "status": "success",
-        "rules":  get_all_rules(),
-        "total":  len(get_all_rules())
+        "rules":  rules,
+        "total":  len(rules)
     }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 5 — ML Classifier endpoints
+# PHASE 5 — ML classifier
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/scan/ml/url",
     summary="Classify URL with RF + BERT soft-voting ensemble",
-    tags=["ML Classifier"]
+    tags=["Phase 5 — ML Classifier"]
 )
 async def scan_ml_url(request: MLScanRequest):
     """
-    Run both classifiers on the URL and combine via soft voting.
-    Returns individual scores for RF and BERT plus the final
-    ensemble decision with confidence.
+    Random Forest (24 URL features) + BERT (raw URL string) combined
+    via configurable soft-voting weights into a final phishing probability.
     """
     try:
         result     = classify_url(
@@ -472,7 +455,7 @@ async def scan_ml_url(request: MLScanRequest):
 @router.post(
     "/scan/ml/url/batch",
     summary="Classify multiple URLs with the ensemble",
-    tags=["ML Classifier"]
+    tags=["Phase 5 — ML Classifier"]
 )
 async def scan_ml_url_batch(urls: List[str]):
     """Classify a batch of URLs using the RF + BERT ensemble."""
@@ -520,131 +503,185 @@ async def scan_ml_url_batch(urls: List[str]):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 6 — File / attachment analysis
+# PHASE 6 — File & attachment analysis
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/scan/file",
-    summary="Analyse an uploaded file for malware / phishing indicators",
-    tags=["File Analysis"]
+    summary="Analyze an uploaded file for malware and phishing",
+    tags=["Phase 6 — File Analysis"]
 )
 async def scan_file(
-    file:          UploadFile    = File(...),
-    email_scan_id: Optional[int] = Form(default=None),
+    file:         UploadFile    = File(...),
+    email_scan_id:Optional[int] = Form(default=None),
+    submitter:    Optional[str] = Form(default="anonymous")
 ):
     """
-    Accepts any file upload (PDF, DOCX, ZIP, EXE, HTML, JS, images).
-
-    Runs:
-      • MD5 / SHA-1 / SHA-256 hashing + known-bad hash lookup
-      • MIME detection via python-magic
-      • Shannon entropy (flags > 7.2 as packed/encrypted)
-      • Printable-string extraction + suspicious-pattern matching
-      • YARA rule scanning (backend/yara_rules/*.yar)
-      • Format-specific deep analysis:
-          - HTML  → credential forms, hidden iframes, obfuscated JS
-          - PDF   → embedded scripts, Open Action, URI actions, URLs
-          - OLE   → VBA macros, AutoOpen, Document_Open
-          - ZIP   → nested executables and script files
-      • Persists result to AttachmentScan table
-      • Optionally links to a parent EmailScan row via email_scan_id
+    Compute file hashes, run YARA rules, calculate Shannon entropy,
+    extract strings/macros, analyze HTML attachments.
+    Accepts: PDF, DOCX, ZIP, EXE, HTML, JS, image files.
     """
+    # Validate file size — max 25 MB for attachment analysis
+    MAX_SIZE = 25 * 1024 * 1024
+
+    file_bytes = await file.read()
+
+    if len(file_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(file_bytes) > MAX_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail="File too large (max 25 MB for attachment analysis)."
+        )
+
     try:
-        file_bytes = await file.read()
-        filename   = file.filename or "unknown_file"
+        result  = analyze_file(
+            file_bytes=file_bytes,
+            filename=file.filename or "unknown",
+            email_scan_id=email_scan_id
+        )
+        scan_id = _save_attachment_scan(result, email_id=email_scan_id)
 
-        if not file_bytes:
-            raise HTTPException(status_code=400, detail="Empty file received.")
-
-        # ── Core analysis ──────────────────────────────────────────────────
-        result  = analyze_file(file_bytes, filename)
-        score   = result.get("risk_score", 5.0)
-        verdict = result.get("verdict", "CLEAN")
-
-        # Map internal verdict → standard label
-        label = {
-            "CLEAN":      "SAFE",
-            "SUSPICIOUS": "SUSPICIOUS",
-            "MALICIOUS":  "MALICIOUS",
-        }.get(verdict, "SUSPICIOUS")
-
-        action = _label_to_action(label)
-
-        # ── Plain-English explanation ──────────────────────────────────────
-        reasons = result.get("verdict_reasons", [])
-        if reasons:
-            explanation = (
-                f"File '{filename}' flagged: "
-                f"{'; '.join(reasons[:3])}."
-            )
-        else:
-            explanation = (
-                f"File '{filename}' passed all checks — "
-                f"no threats detected."
-            )
-
-        # ── Persist to DB ──────────────────────────────────────────────────
-        db_id = _save_attachment_scan(result, filename, email_scan_id)
-
-        # Surface email_scan_id and db_id in module_results for the
-        # Flask blueprint and the JS frontend to consume
-        result["email_scan_id"] = email_scan_id
-        result["db_id"]         = db_id
+        # Map verdict to standard label
+        verdict_map = {
+            "Clean":      ("SAFE",      10),
+            "Suspicious": ("SUSPICIOUS",55),
+            "Malicious":  ("MALICIOUS", 85),
+            "Unknown":    ("SUSPICIOUS",40),
+        }
+        label, risk_score = verdict_map.get(
+            result.get("verdict", "Unknown"),
+            ("SUSPICIOUS", 40)
+        )
 
         return build_response(
             status="success",
-            risk_score=score,
+            risk_score=float(risk_score),
             label=label,
             module_results={"file_analysis": result},
-            explanation=explanation,
-            recommended_action=action
-        ) | {"scan_id": db_id}
-
-    except HTTPException:
-        raise
+            explanation=_build_file_explanation(result),
+            recommended_action=_label_to_action(label)
+        ) | {"scan_id": scan_id}
 
     except Exception as e:
         logger.error(f"File scan error: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content=error_response(f"File analysis failed: {str(e)[:200]}")
-        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/scan/file/batch",
+    summary="Analyze multiple file attachments from one email",
+    tags=["Phase 6 — File Analysis"]
+)
+async def scan_file_batch(
+    files:        List[UploadFile] = File(...),
+    email_scan_id:Optional[int]    = Form(default=None)
+):
+    """Analyze multiple attachments in one request."""
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided.")
+    if len(files) > 10:
+        raise HTTPException(status_code=400, detail="Max 10 files per batch.")
+
+    results    = []
+    max_score  = 0
+    max_label  = "SAFE"
+
+    verdict_map = {
+        "Clean":      ("SAFE",      10),
+        "Suspicious": ("SUSPICIOUS",55),
+        "Malicious":  ("MALICIOUS", 85),
+        "Unknown":    ("SUSPICIOUS",40),
+    }
+
+    for upload in files:
+        try:
+            file_bytes = await upload.read()
+            if len(file_bytes) == 0:
+                continue
+
+            result  = analyze_file(
+                file_bytes=file_bytes,
+                filename=upload.filename or "unknown",
+                email_scan_id=email_scan_id
+            )
+            _save_attachment_scan(result, email_id=email_scan_id)
+            results.append(result)
+
+            label, score = verdict_map.get(
+                result.get("verdict", "Unknown"), ("SUSPICIOUS", 40)
+            )
+            if score > max_score:
+                max_score = score
+                max_label = label
+
+        except Exception as e:
+            logger.error(f"Batch file error for {upload.filename}: {e}")
+            results.append({
+                "filename": upload.filename,
+                "error":    str(e),
+                "verdict":  "Unknown"
+            })
+
+    return build_response(
+        status="success",
+        risk_score=float(max_score),
+        label=max_label,
+        module_results={
+            "file_batch": {
+                "total":   len(results),
+                "results": results
+            }
+        },
+        explanation=(
+            f"Analyzed {len(results)} file(s). "
+            f"Highest risk verdict: {max_label}."
+        ),
+        recommended_action=_label_to_action(max_label)
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Shared scoring / label helpers
+# Shared helper functions
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _score_to_label(score: float) -> str:
+    """Convert a 0–100 risk score to a standard label."""
     if score < 30:  return "SAFE"
     if score < 70:  return "SUSPICIOUS"
     return "MALICIOUS"
 
 
 def _label_to_action(label: str) -> str:
+    """Map a label to a recommended analyst action."""
     return {
-        "SAFE":       "ALLOW",
-        "BENIGN":     "ALLOW",
-        "SUSPICIOUS": "WARN",
-        "MALICIOUS":  "QUARANTINE",
+        "SAFE":      "ALLOW",
+        "BENIGN":    "ALLOW",
+        "LEGITIMATE":"ALLOW",
+        "SUSPICIOUS":"WARN",
+        "MALICIOUS": "QUARANTINE"
     }.get(label, "WARN")
 
 
 def _risk_level_to_label(risk_level: str) -> str:
+    """Convert Nmap risk level to standard label."""
     return {
         "LOW":      "SAFE",
         "MEDIUM":   "SUSPICIOUS",
         "HIGH":     "SUSPICIOUS",
         "CRITICAL": "MALICIOUS",
-        "UNKNOWN":  "SUSPICIOUS",
+        "UNKNOWN":  "SUSPICIOUS"
     }.get(risk_level, "SUSPICIOUS")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 1 DB / explanation helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Phase 1 helpers ───────────────────────────────────────────────────────────
 
 def _calculate_phase1_risk(parsed: dict) -> float:
+    """
+    Compute a Phase 1 preliminary risk score (0–100).
+    DistilBERT score contributes up to 60 pts,
+    header anomalies up to 30 pts, auth failures up to 10 pts.
+    """
     score = 0.0
 
     distilbert = parsed.get("distilbert_result", {})
@@ -678,8 +715,10 @@ def _build_email_explanation(parsed: dict, label: str) -> str:
             f"({int(d.get('score', 0) * 100)}% confidence)."
         )
 
-    highs = [a for a in parsed.get("anomalies", [])
-             if a.get("severity") == "high"]
+    highs = [
+        a for a in parsed.get("anomalies", [])
+        if a.get("severity") == "high"
+    ]
     if highs:
         parts.append(f"Header anomaly: {highs[0]['description']}")
 
@@ -691,11 +730,16 @@ def _build_email_explanation(parsed: dict, label: str) -> str:
     if n:
         parts.append(f"{n} URL(s) extracted for further analysis.")
 
-    return " ".join(parts) or f"Email assessed as {label}. No critical indicators."
+    return " ".join(parts) or f"Email assessed as {label}."
 
 
-def _save_email_scan(parsed: dict, risk_score: float,
-                     label: str, filename: str = "") -> Optional[int]:
+def _save_email_scan(
+    parsed: dict,
+    risk_score: float,
+    label: str,
+    filename: str = ""
+) -> Optional[int]:
+    """Persist a parsed email result to the EmailScan table."""
     try:
         scan = EmailScan(
             filename     = filename or "pasted_email",
@@ -709,7 +753,7 @@ def _save_email_scan(parsed: dict, risk_score: float,
             dkim_result  = parsed.get("auth_results", {}).get("dkim",  "none"),
             dmarc_result = parsed.get("auth_results", {}).get("dmarc", "none"),
             risk_score   = risk_score,
-            label        = label,
+            label        = label
         )
         db.session.add(scan)
         db.session.flush()
@@ -731,9 +775,7 @@ def _save_email_scan(parsed: dict, risk_score: float,
         return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 2 DB / explanation helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Phase 2 helpers ───────────────────────────────────────────────────────────
 
 def _build_url_explanation(result: dict) -> str:
     from urllib.parse import urlparse
@@ -748,7 +790,9 @@ def _build_url_explanation(result: dict) -> str:
 
     w = result.get("whois", {})
     if w.get("is_young_domain"):
-        parts.append(f"Domain is only {w.get('domain_age_days')} days old.")
+        parts.append(
+            f"Domain is only {w.get('domain_age_days')} days old."
+        )
 
     s = result.get("ssl", {})
     if not s.get("has_ssl"):
@@ -763,7 +807,7 @@ def _build_url_explanation(result: dict) -> str:
         final = urlparse(r.get("final_url", "")).netloc
         parts.append(
             f"Redirects through {r['hop_count']} hops "
-            f"(final destination: {final})."
+            f"(final: {final})."
         )
 
     flags = result.get("flags", [])
@@ -773,16 +817,19 @@ def _build_url_explanation(result: dict) -> str:
     return " ".join(parts) or "URL analyzed — no high-risk indicators."
 
 
-def _save_url_scan(result: dict,
-                   email_id: Optional[int] = None) -> Optional[int]:
+def _save_url_scan(
+    result: dict,
+    email_id: Optional[int] = None
+) -> Optional[int]:
+    """Persist a URL intelligence result to the URLScan table."""
     try:
         scan = URLScan(
             email_id        = email_id,
             raw_url         = result.get("original_url",   "")[:2048],
             normalized_url  = result.get("normalized_url", "")[:2048],
             domain          = result.get("domain",         "")[:255],
-            ip_address      = result.get("ip",  {}).get("ip_address", ""),
-            country         = result.get("ip",  {}).get("country",    ""),
+            ip_address      = result.get("ip", {}).get("ip_address", ""),
+            country         = result.get("ip", {}).get("country",    ""),
             whois_data      = json.dumps(result.get("whois", {})),
             domain_age_days = result.get("whois", {}).get("domain_age_days"),
             ssl_valid       = result.get("ssl",  {}).get("valid",  False),
@@ -791,7 +838,7 @@ def _save_url_scan(result: dict,
                 result.get("redirects", {}).get("chain", [])
             ),
             ml_score        = result.get("ml_result", {}).get("score", 0.0),
-            final_label     = result.get("label", "UNKNOWN"),
+            final_label     = result.get("label", "UNKNOWN")
         )
         db.session.add(scan)
         db.session.commit()
@@ -803,9 +850,7 @@ def _save_url_scan(result: dict,
         return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 3 DB / explanation helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Phase 3 helpers ───────────────────────────────────────────────────────────
 
 def _build_network_explanation(result: dict) -> str:
     if not result.get("authorized"):
@@ -816,7 +861,7 @@ def _build_network_explanation(result: dict) -> str:
 
     parts = [
         f"Found {result.get('open_port_count', 0)} open port(s) — "
-        f"overall risk: {result.get('risk_level', 'UNKNOWN')}."
+        f"risk level: {result.get('risk_level', 'UNKNOWN')}."
     ]
 
     dangerous = [p for p in result.get("ports", []) if p.get("is_dangerous")]
@@ -841,6 +886,7 @@ def _build_network_explanation(result: dict) -> str:
 
 
 def _save_network_scan(result: dict) -> Optional[int]:
+    """Persist a NetworkScan and its PortResult rows."""
     try:
         scan = NetworkScan(
             url_scan_id      = result.get("url_scan_id"),
@@ -854,8 +900,8 @@ def _save_network_scan(result: dict) -> Optional[int]:
             risk_level       = result.get("risk_level",   "UNKNOWN"),
             risk_flags       = json.dumps(result.get("risk_flags", [])),
             raw_nmap_output  = result.get("raw_nmap_output", ""),
-            scan_duration_s  = result.get("scan_duration_s",  0),
-            authorized       = result.get("authorized",   False),
+            scan_duration_s  = result.get("scan_duration_s", 0),
+            authorized       = result.get("authorized",   False)
         )
         db.session.add(scan)
         db.session.flush()
@@ -872,7 +918,7 @@ def _save_network_scan(result: dict) -> Optional[int]:
                 service_extra    = p.get("service_extra",   "")[:500],
                 is_dangerous     = p.get("is_dangerous",    False),
                 danger_reason    = p.get("danger_reason",   "")[:255],
-                cpe              = p.get("cpe",             "")[:255],
+                cpe              = p.get("cpe",             "")[:255]
             ))
 
         db.session.commit()
@@ -884,9 +930,7 @@ def _save_network_scan(result: dict) -> Optional[int]:
         return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 4 explanation helper
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Phase 4 helpers ───────────────────────────────────────────────────────────
 
 def _build_rules_explanation(result: dict) -> str:
     hits = result.get("hits", [])
@@ -906,38 +950,64 @@ def _build_rules_explanation(result: dict) -> str:
     return " ".join(parts)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 6 DB helper
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Phase 6 helpers ───────────────────────────────────────────────────────────
 
-def _save_attachment_scan(result: dict,
-                          filename: str,
-                          email_scan_id: Optional[int]) -> Optional[int]:
-    """
-    Persist one AttachmentScan row.
-    Called from scan_file() so the FastAPI layer owns the DB write
-    (the Flask blueprint no longer needs to duplicate this logic).
-    """
+def _build_file_explanation(result: dict) -> str:
+    parts = []
+
+    verdict = result.get("verdict", "Unknown")
+    parts.append(f"File verdict: {verdict}.")
+
+    yara = result.get("yara_matches", [])
+    if yara:
+        parts.append(
+            f"YARA rules matched: {', '.join(yara[:3])}."
+        )
+
+    entropy = result.get("entropy")
+    if entropy and entropy > 7.0:
+        parts.append(
+            f"High entropy ({entropy:.2f}) suggests "
+            f"packed or encrypted content."
+        )
+
+    hashes = result.get("hashes", {})
+    if hashes.get("sha256"):
+        parts.append(
+            f"SHA-256: {hashes['sha256'][:16]}..."
+        )
+
+    static = result.get("static_findings", [])
+    if static:
+        parts.append(
+            f"{len(static)} suspicious string(s) found in static analysis."
+        )
+
+    return " ".join(parts) or f"File analyzed — verdict: {verdict}."
+
+
+def _save_attachment_scan(
+    result: dict,
+    email_id: Optional[int] = None
+) -> Optional[int]:
+    """Persist a file analysis result to the AttachmentScan table."""
     try:
-        import datetime
         hashes = result.get("hashes", {})
-
-        record = AttachmentScan(
-            email_id     = email_scan_id,
-            filename     = filename,
-            file_type    = result.get("file_type",  "")[:255],
-            md5          = hashes.get("md5",   "")[:64],
-            sha256       = hashes.get("sha256","")[:64],
+        scan = AttachmentScan(
+            email_id     = email_id,
+            filename     = result.get("filename",    "unknown")[:255],
+            file_type    = result.get("file_type",   "unknown")[:50],
+            md5          = hashes.get("md5",         "")[:32],
+            sha256       = hashes.get("sha256",      "")[:64],
             file_size    = result.get("file_size",   0),
             entropy      = result.get("entropy",     0.0),
-            yara_matches = json.dumps(result.get("yara_matches",      [])),
-            static_finds = json.dumps(result.get("suspicious_strings",[])),
-            verdict      = result.get("verdict", "CLEAN"),
-            scanned_at   = datetime.datetime.utcnow(),
+            yara_matches = json.dumps(result.get("yara_matches",    [])),
+            static_finds = json.dumps(result.get("static_findings", [])),
+            verdict      = result.get("verdict",     "Unknown")
         )
-        db.session.add(record)
+        db.session.add(scan)
         db.session.commit()
-        return record.id
+        return scan.id
 
     except Exception as e:
         logger.error(f"AttachmentScan DB save error: {e}")

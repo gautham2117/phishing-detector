@@ -1,65 +1,102 @@
 /*
   phishing_html.yar
-  HTML phishing and credential-harvesting detection rules
+  YARA rules specifically targeting phishing HTML attachments.
+  These detect credential harvesting forms, hidden iframes,
+  and obfuscated redirects in HTML files.
 */
 
-rule CredentialHarvestingForm
+rule Phishing_Login_Form
 {
     meta:
-        description = "HTML page with password input and external form action"
-        severity     = "high"
+        description = "Detects HTML login forms with password fields typical of phishing"
+        severity    = "HIGH"
+        author      = "PhishingDetector"
+
     strings:
-        $pwd    = "type=\"password\""  nocase
-        $pwd2   = "type='password'"    nocase
-        $form   = "<form"              nocase
-        $submit = "type=\"submit\""    nocase
-        $http   = "action=\"http"      nocase
+        $form     = "<form" nocase
+        $password = "type=\"password\"" nocase
+        $password2 = "type='password'" nocase
+        $submit   = "type=\"submit\"" nocase
+        $submit2  = "type='submit'" nocase
+
     condition:
-        ($pwd or $pwd2) and $form and ($submit or $http)
+        $form and ($password or $password2) and ($submit or $submit2)
 }
 
-rule ObfuscatedJavaScript
+rule Hidden_iframe_Redirect
 {
     meta:
-        description = "Obfuscated JavaScript patterns common in phishing kits"
-        severity     = "high"
+        description = "Detects hidden iframes used for phishing redirects"
+        severity    = "CRITICAL"
+        author      = "PhishingDetector"
+
     strings:
-        $eval        = "eval("         nocase
-        $fromchar    = "fromCharCode"  nocase
-        $unescape    = "unescape("     nocase
-        $atob        = "atob("         nocase
-        $docwrite    = "document.write" nocase
+        $iframe1 = "<iframe" nocase
+        $hidden1 = "display:none" nocase
+        $hidden2 = "visibility:hidden" nocase
+        $hidden3 = "width=\"0\"" nocase
+        $hidden4 = "height=\"0\"" nocase
+
     condition:
-        2 of them
+        $iframe1 and any of ($hidden*)
 }
 
-rule HiddenIframe
+rule Credential_Harvesting_Form_Action
 {
     meta:
-        description = "Hidden iframe used for silent redirection or content injection"
-        severity     = "medium"
+        description = "Detects form actions posting to suspicious external URLs"
+        severity    = "CRITICAL"
+        author      = "PhishingDetector"
+
     strings:
-        $iframe  = "<iframe"         nocase
-        $dnone   = "display:none"    nocase
-        $dnone2  = "display: none"   nocase
-        $w0      = "width=\"0\""
-        $h0      = "height=\"0\""
+        $form   = "<form" nocase
+        $action = "action=" nocase
+        $http   = "http://" nocase
+        $post   = "method=\"post\"" nocase
+        $post2  = "method='post'" nocase
+
     condition:
-        $iframe and ($dnone or $dnone2 or $w0 or $h0)
+        $form and $action and $http and ($post or $post2)
 }
 
-rule PhishingKeywords
+rule Phishing_Brand_Impersonation
 {
     meta:
-        description = "Common phishing page keywords"
-        severity     = "low"
+        description = "Detects brand name impersonation patterns in HTML"
+        severity    = "MEDIUM"
+        author      = "PhishingDetector"
+
     strings:
-        $kw1 = "verify your account"   nocase
-        $kw2 = "confirm your identity" nocase
-        $kw3 = "unusual sign-in"       nocase
-        $kw4 = "account suspended"     nocase
-        $kw5 = "update your payment"   nocase
-        $kw6 = "click here to unlock"  nocase
+        $paypal    = "paypal" nocase
+        $google    = "google" nocase
+        $microsoft = "microsoft" nocase
+        $apple     = "apple" nocase
+        $amazon    = "amazon" nocase
+        $login_kw  = "sign in" nocase
+        $verify_kw = "verify your" nocase
+        $update_kw = "update your" nocase
+
     condition:
-        2 of them
+        any of ($paypal, $google, $microsoft, $apple, $amazon) and
+        any of ($login_kw, $verify_kw, $update_kw)
+}
+
+rule Obfuscated_HTML_Redirect
+{
+    meta:
+        description = "Detects obfuscated JavaScript redirects in HTML"
+        severity    = "HIGH"
+        author      = "PhishingDetector"
+
+    strings:
+        $loc1 = "window.location" nocase
+        $loc2 = "document.location" nocase
+        $loc3 = "location.href" nocase
+        $loc4 = "location.replace" nocase
+        $enc1 = "atob(" nocase
+        $enc2 = "unescape(" nocase
+        $enc3 = "fromCharCode" nocase
+
+    condition:
+        any of ($loc*) and any of ($enc*)
 }
