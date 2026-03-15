@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PhishGuard — Select Role</title>
+  <title>MAHORAGA Sentinel — Select Role</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -32,10 +32,19 @@
       margin-bottom: 10px;
     }
     .rs-title {
-      font-size: 1.6rem;
-      font-weight: 700;
+      font-size: 1.8rem;
+      font-weight: 800;
       color: #388bfd;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
+      letter-spacing: 0.04em;
+    }
+    .rs-subtitle-name {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #8b949e;
+      margin-bottom: 8px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
     }
     .rs-subtitle {
       font-size: .88rem;
@@ -77,7 +86,6 @@
       font-size: 1rem;
       font-weight: 700;
       margin-bottom: 4px;
-      /* color applied by JS from data-color */
     }
     .rs-card-desc {
       font-size: .82rem;
@@ -126,6 +134,14 @@
       margin-top: 16px;
       line-height: 1.6;
     }
+
+    .rs-divider {
+      width: 48px;
+      height: 2px;
+      background: linear-gradient(90deg, #388bfd, #f85149);
+      margin: 10px auto 12px;
+      border-radius: 2px;
+    }
   </style>
 </head>
 <body>
@@ -133,10 +149,12 @@
 <div class="rs-container">
 
   <div class="rs-header">
-    <div class="rs-logo">🛡</div>
-    <div class="rs-title">PhishGuard</div>
+    <div class="rs-logo">⚔</div>
+    <div class="rs-title">MAHORAGA</div>
+    <div class="rs-subtitle-name">Sentinel</div>
+    <div class="rs-divider"></div>
     <div class="rs-subtitle">
-      Real-Time AI/ML Phishing Detection System<br>
+      AI-Powered Threat Intelligence &amp; Phishing Detection Platform<br>
       Select your access role to continue
     </div>
   </div>
@@ -173,7 +191,7 @@
     <button type="submit"
             class="rs-submit-btn"
             id="submitBtn">
-      Enter PhishGuard →
+      Enter Sentinel →
     </button>
   </form>
 
@@ -187,7 +205,6 @@
 <script>
 "use strict";
 
-// Apply title colors from data-color — no Jinja in style attributes
 document.querySelectorAll(".rs-card").forEach(function (card) {
     var color    = card.dataset.color || "#388bfd";
     var roleKey  = card.dataset.role  || "";
@@ -197,7 +214,6 @@ document.querySelectorAll(".rs-card").forEach(function (card) {
     }
 });
 
-// Click handlers
 document.querySelectorAll(".rs-card").forEach(function (card) {
     card.addEventListener("click", function () {
         selectRole(card.dataset.role, card.dataset.color);
@@ -205,11 +221,9 @@ document.querySelectorAll(".rs-card").forEach(function (card) {
 });
 
 function selectRole(roleKey, color) {
-    // Deselect all
     document.querySelectorAll(".rs-card").forEach(function (c) {
         c.classList.remove("selected");
         c.style.borderColor = "#30363d";
-
         var check = document.getElementById("check-" + c.dataset.role);
         if (check) {
             check.textContent       = "";
@@ -218,7 +232,6 @@ function selectRole(roleKey, color) {
         }
     });
 
-    // Select this card
     var card  = document.getElementById("card-"  + roleKey);
     var check = document.getElementById("check-" + roleKey);
 
@@ -232,7 +245,6 @@ function selectRole(roleKey, color) {
         check.style.borderColor = color;
     }
 
-    // Store value and activate button
     document.getElementById("roleInput").value = roleKey;
 
     var btn = document.getElementById("submitBtn");
