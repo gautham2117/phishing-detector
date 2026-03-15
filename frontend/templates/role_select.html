@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PhishGuard — Select Role</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f1117;
+      color: #e6edf3;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .rs-container {
+      width: 100%;
+      max-width: 560px;
+    }
+
+    .rs-header {
+      text-align: center;
+      margin-bottom: 36px;
+    }
+    .rs-logo {
+      font-size: 3rem;
+      margin-bottom: 10px;
+    }
+    .rs-title {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #388bfd;
+      margin-bottom: 6px;
+    }
+    .rs-subtitle {
+      font-size: .88rem;
+      color: #8b949e;
+      line-height: 1.6;
+    }
+
+    .rs-cards {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+
+    .rs-card {
+      background: #161b22;
+      border: 2px solid #30363d;
+      border-radius: 12px;
+      padding: 20px 24px;
+      cursor: pointer;
+      transition: border-color .2s, background .2s, transform .1s;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      user-select: none;
+    }
+    .rs-card:hover  { background: #21262d; transform: translateY(-1px); }
+    .rs-card.selected { background: #21262d; }
+
+    .rs-card-icon {
+      font-size: 2rem;
+      flex-shrink: 0;
+      width: 44px;
+      text-align: center;
+    }
+
+    .rs-card-body   { flex: 1; }
+    .rs-card-title  {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+      /* color applied by JS from data-color */
+    }
+    .rs-card-desc {
+      font-size: .82rem;
+      color: #8b949e;
+      line-height: 1.5;
+    }
+
+    .rs-card-check {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 2px solid #30363d;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: .8rem;
+      transition: background .2s, border-color .2s;
+      color: #fff;
+    }
+
+    .rs-submit-btn {
+      width: 100%;
+      padding: 14px;
+      background: #388bfd;
+      border: none;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .15s, opacity .15s;
+      opacity: .4;
+      pointer-events: none;
+    }
+    .rs-submit-btn.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .rs-submit-btn.active:hover { filter: brightness(1.1); }
+
+    .rs-note {
+      text-align: center;
+      font-size: .76rem;
+      color: #8b949e;
+      margin-top: 16px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+
+<div class="rs-container">
+
+  <div class="rs-header">
+    <div class="rs-logo">🛡</div>
+    <div class="rs-title">PhishGuard</div>
+    <div class="rs-subtitle">
+      Real-Time AI/ML Phishing Detection System<br>
+      Select your access role to continue
+    </div>
+  </div>
+
+  <form method="POST" action="/role/set" id="roleForm">
+    <input type="hidden" name="role" id="roleInput" value="">
+
+    <div class="rs-cards">
+      {% for role_key, role_cfg in roles.items() %}
+      <div class="rs-card"
+           id="card-{{ role_key }}"
+           data-role="{{ role_key }}"
+           data-color="{{ role_cfg.color }}"
+           data-label="{{ role_cfg.label }}">
+
+        <div class="rs-card-icon">{{ role_cfg.icon }}</div>
+
+        <div class="rs-card-body">
+          <div class="rs-card-title"
+               id="title-{{ role_key }}">
+            {{ role_cfg.label }}
+          </div>
+          <div class="rs-card-desc">
+            {{ role_cfg.description }}
+          </div>
+        </div>
+
+        <div class="rs-card-check"
+             id="check-{{ role_key }}"></div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <button type="submit"
+            class="rs-submit-btn"
+            id="submitBtn">
+      Enter PhishGuard →
+    </button>
+  </form>
+
+  <p class="rs-note">
+    No login required — your role is stored in the browser session only.<br>
+    You can switch roles at any time from the sidebar.
+  </p>
+
+</div>
+
+<script>
+"use strict";
+
+// Apply title colors from data-color — no Jinja in style attributes
+document.querySelectorAll(".rs-card").forEach(function (card) {
+    var color    = card.dataset.color || "#388bfd";
+    var roleKey  = card.dataset.role  || "";
+    var titleEl  = document.getElementById("title-" + roleKey);
+    if (titleEl) {
+        titleEl.style.color = color;
+    }
+});
+
+// Click handlers
+document.querySelectorAll(".rs-card").forEach(function (card) {
+    card.addEventListener("click", function () {
+        selectRole(card.dataset.role, card.dataset.color);
+    });
+});
+
+function selectRole(roleKey, color) {
+    // Deselect all
+    document.querySelectorAll(".rs-card").forEach(function (c) {
+        c.classList.remove("selected");
+        c.style.borderColor = "#30363d";
+
+        var check = document.getElementById("check-" + c.dataset.role);
+        if (check) {
+            check.textContent       = "";
+            check.style.background  = "transparent";
+            check.style.borderColor = "#30363d";
+        }
+    });
+
+    // Select this card
+    var card  = document.getElementById("card-"  + roleKey);
+    var check = document.getElementById("check-" + roleKey);
+
+    if (card) {
+        card.classList.add("selected");
+        card.style.borderColor = color;
+    }
+    if (check) {
+        check.textContent       = "✓";
+        check.style.background  = color;
+        check.style.borderColor = color;
+    }
+
+    // Store value and activate button
+    document.getElementById("roleInput").value = roleKey;
+
+    var btn = document.getElementById("submitBtn");
+    btn.classList.add("active");
+    btn.style.background = color;
+}
+</script>
+
+</body>
+</html>

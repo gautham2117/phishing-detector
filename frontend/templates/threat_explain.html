@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Threat Explanation — PhishGuard{% endblock %}
+
+{% block content %}
+<!-- Data island -->
+<div id="page-data"
+     data-generate-url="/threat/explain/generate"
+     data-translate-url="/threat/explain/translate"
+     data-tips-url="/threat/explain/tips"
+     data-languages-url="/threat/explain/languages"
+     style="display:none"></div>
+
+<div class="page-header">
+  <h1 class="page-title">
+    <span class="title-icon">🌐</span>
+    Threat Explanation &amp; Awareness
+  </h1>
+  <p class="page-subtitle">
+    BART-powered explanations · 6-language translation ·
+    Tailored security awareness tips
+  </p>
+</div>
+
+<!-- ── Input panel ────────────────────────────────────────────────────────── -->
+<div class="card te-input-card">
+  <div class="card-header">
+    <span class="card-icon">📝</span>
+    <span class="card-title">Enter Threat Information</span>
+  </div>
+  <div class="card-body">
+    <div class="te-form-grid">
+
+      <div class="te-field te-field-full">
+        <label class="form-label">Threat Text / Scan Result</label>
+        <textarea id="teTextInput" class="ai-textarea te-textarea"
+                  placeholder="Paste any scan result, threat description, or alert text here…"></textarea>
+      </div>
+
+      <div class="te-field">
+        <label class="form-label">Verdict (optional)</label>
+        <select id="teVerdict" class="form-input mm-select">
+          <option value="">— Unknown —</option>
+          <option value="MALICIOUS">MALICIOUS</option>
+          <option value="SUSPICIOUS">SUSPICIOUS</option>
+          <option value="SAFE">SAFE</option>
+          <option value="PHISHING">PHISHING</option>
+          <option value="AI_GENERATED">AI_GENERATED</option>
+        </select>
+      </div>
+
+      <div class="te-field">
+        <label class="form-label">Module (optional)</label>
+        <select id="teModule" class="form-input mm-select">
+          <option value="">— Unknown —</option>
+          <option value="Email">Email</option>
+          <option value="URL">URL</option>
+          <option value="Attachment">Attachment</option>
+          <option value="Image">Image</option>
+          <option value="AI Detection">AI Detection</option>
+          <option value="Network">Network</option>
+          <option value="Rules">Rules</option>
+        </select>
+      </div>
+
+      <div class="te-field">
+        <label class="form-label">Risk Score (optional)</label>
+        <input type="number" id="teRiskScore" class="form-input"
+               placeholder="0–100" min="0" max="100" step="0.1">
+      </div>
+
+    </div>
+
+    <div class="ai-action-row" style="margin-top:16px">
+      <button class="btn btn-primary" id="teGenerateBtn">
+        <span id="teBtnText">🔍 Generate Explanation</span>
+        <span id="teSpinner" style="display:none">⏳</span>
+      </button>
+      <div class="ai-error" id="teError" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Results ─────────────────────────────────────────────────────────────── -->
+<div id="teResultsPanel" style="display:none">
+
+  <!-- English explanation -->
+  <div class="card te-explain-card">
+    <div class="card-header">
+      <span class="card-icon">🤖</span>
+      <span class="card-title">AI-Generated Explanation (English)</span>
+      <span class="te-model-badge">BART</span>
+    </div>
+    <div class="card-body">
+      <p class="te-explanation-text" id="teEnglishExplanation"></p>
+    </div>
+  </div>
+
+  <!-- Language selector + translation -->
+  <div class="card te-translate-card">
+    <div class="card-header">
+      <span class="card-icon">🌍</span>
+      <span class="card-title">Translate Explanation</span>
+    </div>
+    <div class="card-body">
+
+      <div class="te-lang-row">
+        <div class="te-lang-selector" id="teLangSelector">
+          <!-- Language buttons rendered by JS -->
+        </div>
+        <button class="btn btn-primary te-translate-btn"
+                id="teTranslateBtn" disabled>
+          <span id="teTransBtnText">Translate</span>
+          <span id="teTransSpinner" style="display:none">⏳</span>
+        </button>
+      </div>
+
+      <div class="te-translate-note" id="teTranslateNote" style="display:none">
+        ⏳ First-time load: downloading MarianMT model (~300 MB).
+        This takes 1–2 minutes. Subsequent translations are instant.
+      </div>
+
+      <div class="te-translated-output" id="teTranslatedOutput"
+           style="display:none">
+        <div class="te-translated-header">
+          <span class="te-translated-lang-flag" id="teTransFlag"></span>
+          <span class="te-translated-lang-name" id="teTransLangName"></span>
+          <span class="te-model-badge" id="teTransModel"></span>
+        </div>
+        <p class="te-explanation-text te-translated-text"
+           id="teTranslatedText"></p>
+        <div class="te-trans-error" id="teTransError"
+             style="display:none"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Security tips -->
+  <div class="card te-tips-card" id="teTipsCard">
+    <div class="card-header">
+      <span class="card-icon" id="teTipsIcon">🛡</span>
+      <span class="card-title">
+        Security Awareness Tips —
+        <span id="teTipsCategory"></span>
+      </span>
+    </div>
+    <div class="card-body">
+      <ul class="te-tips-list" id="teTipsList"></ul>
+    </div>
+  </div>
+
+</div><!-- /teResultsPanel -->
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/threat_explain.js"></script>
+{% endblock %}

@@ -1,549 +1,524 @@
-# dashboard.py
-# Flask Blueprint for the main Overview dashboard page.
-#
-# This is the landing page of the entire application.
-# It aggregates live summary data from every module's database tables
-# and serves it to the frontend — both on initial page load (via
-# Jinja2 template context) and on every 5-second polling request
-# (via the /dashboard/stats JSON endpoint).
-#
-# Data it pulls together:
-#   - Scan counts today (email / URL / network / file / image / SMS)
-#   - Live threat feed (last 10 detections with scores)
-#   - Threat distribution (Safe / Suspicious / Malicious breakdown)
-#   - Module health status (each module responds to a ping or is marked offline)
-#   - Recent alerts (pulled from the Alert table)
-#   - Top risky domains detected today
+"""
+backend/app/routes/dashboard.py
+Phase 17 — Unified Dashboard & Role-Based Access Control
+"""
 
 import json
 import logging
-import requests
-from datetime import datetime, date, timedelta
+import datetime
+import functools
+
+import requests as http_requests
 from flask import (
-    Blueprint, render_template, jsonify, current_app
+    Blueprint, render_template, request,
+    jsonify, session, redirect, url_for,
+    current_app
 )
-from sqlalchemy import func, cast, Date
 
 from backend.app.database import db
-from backend.app.models import (
-    EmailScan, URLScan, AttachmentScan,
-    Alert, NetworkScan, ModelVersion
+from backend.app.models   import (
+    EmailScan, URLScan, NetworkScan,
+    AttachmentScan, AIDetectionScan,
+    ImageAnalysisScan, Alert,
 )
 
-logger = logging.getLogger(__name__)
+logger       = logging.getLogger(__name__)
+dashboard_bp = Blueprint("dashboard_bp", __name__)
 
-dashboard_bp = Blueprint("dashboard", __name__)
+FASTAPI_BASE = "http://127.0.0.1:8001"
+PROXY_TIMEOUT = 15
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Role definitions
+# ─────────────────────────────────────────────────────────────────────────────
 
-def _api():
-    return current_app.config.get("FASTAPI_BASE_URL", "http://127.0.0.1:8001")
+ROLES = {
+    "admin": {
+        "label":       "Admin",
+        "icon":        "👑",
+        "description": "Full access — all modules, model management, alerts",
+        "color":       "#f85149",
+        "allowed_prefixes": None,   # None = all pages allowed
+    },
+    "analyst": {
+        "label":       "Analyst",
+        "icon":        "🔬",
+        "description": "Scan pages, alerts, live monitor, threat explanation",
+        "color":       "#388bfd",
+        "allowed_prefixes": [
+            "/", "/email", "/url", "/network", "/rules",
+            "/ml", "/attachments", "/image", "/ai",
+            "/alerts", "/monitor", "/threat", "/extension",
+            "/platform", "/risk",
+        ],
+    },
+    "viewer": {
+        "label":       "Viewer",
+        "icon":        "👁",
+        "description": "Overview dashboard only — read-only access",
+        "color":       "#3fb950",
+        "allowed_prefixes": ["/"],
+    },
+}
+
+# Pages that are always public (no role check)
+PUBLIC_PATHS = ["/role/select", "/role/set", "/static/"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET /  — main overview page
+# Role helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-@dashboard_bp.route("/", methods=["GET"])
-def overview():
-    """
-    Render the main Overview dashboard page.
-
-    Pre-computes all summary stats server-side so the page loads with
-    real data immediately (no spinner on first visit).
-    The JS polling then keeps numbers live without full page reloads.
-    """
-    stats    = _compute_stats()
-    alerts   = _recent_alerts(limit=5)
-    feed     = _threat_feed(limit=10)
-    health   = _module_health()
-    top_doms = _top_risky_domains(limit=8)
-
-    return render_template(
-        "dashboard.html",
-        stats=stats,
-        alerts=alerts,
-        threat_feed=feed,
-        module_health=health,
-        top_domains=top_doms,
-        now=datetime.utcnow()
-    )
+def get_current_role() -> str:
+    return session.get("role", "")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GET /dashboard/stats  — JSON endpoint polled every 5 s by dashboard.js
-# ─────────────────────────────────────────────────────────────────────────────
-
-@dashboard_bp.route("/dashboard/stats", methods=["GET"])
-def dashboard_stats():
-    """
-    Return all live dashboard data as JSON.
-    Called by the frontend JavaScript every 5 seconds to refresh
-    counters, charts, and the threat feed without a page reload.
-    """
-    return jsonify({
-        "stats":          _compute_stats(),
-        "threat_feed":    _threat_feed(limit=10),
-        "alerts":         _recent_alerts(limit=5),
-        "module_health":  _module_health(),
-        "top_domains":    _top_risky_domains(limit=8),
-        "distribution":   _threat_distribution(),
-        "trend":          _scan_trend_last_7_days(),
-        "timestamp":      datetime.utcnow().isoformat() + "Z"
-    })
+def is_allowed(path: str) -> bool:
+    role = get_current_role()
+    if not role:
+        return False
+    cfg = ROLES.get(role)
+    if not cfg:
+        return False
+    if cfg["allowed_prefixes"] is None:
+        return True   # admin — all allowed
+    for prefix in cfg["allowed_prefixes"]:
+        if path == prefix or path.startswith(prefix.rstrip("/") + "/"):
+            return True
+    return False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Stat computation helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _compute_stats() -> dict:
-    """
-    Count scans performed today, broken down by input type.
-    Also computes total all-time scan counts for the overview cards.
-
-    We use SQLAlchemy's func.count() with a date filter:
-      cast(Model.scanned_at, Date) == date.today()
-    This is SQLite-compatible and works with PostgreSQL too.
-    """
-    today = date.today()
-
-    def count_today(model, date_col):
-        """Count rows where date_col falls on today's date."""
-        return (
-            db.session.query(func.count(model.id))
-            .filter(cast(date_col, Date) == today)
-            .scalar() or 0
-        )
-
-    def count_total(model):
-        return db.session.query(func.count(model.id)).scalar() or 0
-
-    # Today's counts
-    emails_today     = count_today(EmailScan,      EmailScan.scanned_at)
-    urls_today       = count_today(URLScan,        URLScan.scanned_at)
-    networks_today   = count_today(NetworkScan,    NetworkScan.scanned_at)
-    attachments_today= count_today(AttachmentScan, AttachmentScan.scanned_at)
-    alerts_today     = count_today(Alert,          Alert.created_at)
-
-    total_scans_today = emails_today + urls_today + networks_today + attachments_today
-
-    # All-time totals
-    total_emails  = count_total(EmailScan)
-    total_urls    = count_total(URLScan)
-    total_alerts  = count_total(Alert)
-
-    # Threat counts today (malicious + suspicious detections)
-    malicious_today = (
-        db.session.query(func.count(EmailScan.id))
-        .filter(
-            cast(EmailScan.scanned_at, Date) == today,
-            EmailScan.label == "MALICIOUS"
-        )
-        .scalar() or 0
-    )
-
-    suspicious_today = (
-        db.session.query(func.count(EmailScan.id))
-        .filter(
-            cast(EmailScan.scanned_at, Date) == today,
-            EmailScan.label == "SUSPICIOUS"
-        )
-        .scalar() or 0
-    )
-
-    return {
-        # Today's scan volume
-        "total_scans_today":   total_scans_today,
-        "emails_today":        emails_today,
-        "urls_today":          urls_today,
-        "networks_today":      networks_today,
-        "attachments_today":   attachments_today,
-        "alerts_today":        alerts_today,
-
-        # Threat detections today
-        "malicious_today":     malicious_today,
-        "suspicious_today":    suspicious_today,
-        "threats_today":       malicious_today + suspicious_today,
-
-        # All-time totals
-        "total_emails_alltime": total_emails,
-        "total_urls_alltime":   total_urls,
-        "total_alerts_alltime": total_alerts,
-    }
+def role_required(f):
+    """Decorator that checks role before serving a page."""
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        path = request.path
+        # Always allow public paths
+        for pub in PUBLIC_PATHS:
+            if path.startswith(pub):
+                return f(*args, **kwargs)
+        # Check role
+        if not get_current_role():
+            return redirect(url_for("dashboard_bp.role_select"))
+        if not is_allowed(path):
+            return render_template(
+                "access_denied.html",
+                role=get_current_role(),
+                path=path,
+            ), 403
+        return f(*args, **kwargs)
+    return decorated
 
 
-def _threat_distribution() -> dict:
-    """
-    Count how many email scans fall into each threat category (all-time).
-    Used to populate the doughnut/pie chart on the overview page.
+def get_sidebar_config():
+    """Return sidebar items filtered by current role."""
+    role = get_current_role()
+    cfg  = ROLES.get(role, {})
+    all_items = _all_sidebar_items()
 
-    Returns: {"safe": N, "suspicious": N, "malicious": N}
-    """
-    rows = (
-        db.session.query(EmailScan.label, func.count(EmailScan.id))
-        .group_by(EmailScan.label)
-        .all()
-    )
+    if cfg.get("allowed_prefixes") is None:
+        return all_items   # admin sees everything
 
-    dist = {"safe": 0, "suspicious": 0, "malicious": 0}
-    for label, count in rows:
-        if label:
-            dist[label.lower()] = count
-
-    return dist
-
-
-def _threat_feed(limit: int = 10) -> list:
-    """
-    Build the live threat feed — the most recent detections across
-    all scan types, ordered by scan time descending.
-
-    For Phase 1–3 we pull from EmailScan and URLScan.
-    Later phases (attachments, images, SMS) will add their own tables.
-
-    Returns a list of unified feed item dicts:
-      {type, subject/url, label, risk_score, scanned_at, scan_id}
-    """
-    feed_items = []
-
-    # ── Email scans ──
-    recent_emails = (
-        EmailScan.query
-        .order_by(EmailScan.scanned_at.desc())
-        .limit(limit)
-        .all()
-    )
-    for s in recent_emails:
-        feed_items.append({
-            "type":       "Email",
-            "display":    s.subject or s.sender or "(no subject)",
-            "detail":     f"From: {s.sender or '—'}",
-            "label":      s.label or "UNKNOWN",
-            "risk_score": round(s.risk_score or 0, 1),
-            "scanned_at": s.scanned_at.isoformat() if s.scanned_at else "",
-            "scan_id":    s.id,
-            "link":       f"/email/scan"
-        })
-
-    # ── URL scans ──
-    recent_urls = (
-        URLScan.query
-        .order_by(URLScan.scanned_at.desc())
-        .limit(limit)
-        .all()
-    )
-    for s in recent_urls:
-        feed_items.append({
-            "type":       "URL",
-            "display":    s.domain or s.raw_url or "—",
-            "detail":     s.raw_url[:80] if s.raw_url else "",
-            "label":      s.final_label or "UNKNOWN",
-            "risk_score": round((s.ml_score or 0) * 100, 1),
-            "scanned_at": s.scanned_at.isoformat() if s.scanned_at else "",
-            "scan_id":    s.id,
-            "link":       f"/url/intel"
-        })
-
-    # ── Network scans ──
-    recent_nets = (
-        NetworkScan.query
-        .order_by(NetworkScan.scanned_at.desc())
-        .limit(limit)
-        .all()
-    )
-    risk_to_score = {"LOW": 10, "MEDIUM": 35, "HIGH": 65,
-                     "CRITICAL": 90, "UNKNOWN": 0}
-    for s in recent_nets:
-        feed_items.append({
-            "type":       "Network",
-            "display":    s.target or "—",
-            "detail":     f"{s.total_open_ports} open ports · {s.ip_resolved or '—'}",
-            "label":      (
-                "SAFE" if s.risk_level == "LOW" else
-                "MALICIOUS" if s.risk_level == "CRITICAL" else
-                "SUSPICIOUS"
-            ),
-            "risk_score": risk_to_score.get(s.risk_level, 0),
-            "scanned_at": s.scanned_at.isoformat() if s.scanned_at else "",
-            "scan_id":    s.id,
-            "link":       f"/network/scan"
-        })
-
-    # ── Alerts ──
-    recent_alerts = (
-        Alert.query
-        .filter(Alert.severity.in_(["High", "Critical"]))
-        .order_by(Alert.created_at.desc())
-        .limit(limit)
-        .all()
-    )
-    for a in recent_alerts:
-        feed_items.append({
-            "type":       "Alert",
-            "display":    f"{a.severity} alert — {a.input_type or '—'}",
-            "detail":     (a.bart_summary or "")[:80],
-            "label":      "MALICIOUS" if a.risk_score >= 70 else "SUSPICIOUS",
-            "risk_score": round(a.risk_score or 0, 1),
-            "scanned_at": a.created_at.isoformat() if a.created_at else "",
-            "scan_id":    a.id,
-            "link":       "/alerts"
-        })
-
-    # Sort all items by scanned_at descending and return top N
-    feed_items.sort(
-        key=lambda x: x.get("scanned_at", ""),
-        reverse=True
-    )
-    return feed_items[:limit]
-
-
-def _recent_alerts(limit: int = 5) -> list:
-    """
-    Return the most recent alerts for the Recent Alerts panel.
-    Includes severity, type, risk score, and BART summary.
-    """
-    alerts = (
-        Alert.query
-        .order_by(Alert.created_at.desc())
-        .limit(limit)
-        .all()
-    )
-    return [{
-        "id":          a.id,
-        "input_type":  a.input_type or "—",
-        "severity":    a.severity or "Low",
-        "risk_score":  round(a.risk_score or 0, 1),
-        "summary": (a.threat_summary or "No summary available.")[:120],
-        "action":      a.recommended_action or "WARN",
-        "created_at":  a.created_at.isoformat() if a.created_at else ""
-    } for a in alerts]
-
-
-def _module_health() -> list:
-    """
-    Check the health of each module by querying the FastAPI /health endpoint
-    and by checking whether recent DB activity exists for each module.
-
-    Each module returns one of:
-      "online"    — API responds + recent DB rows exist
-      "idle"      — API responds but no recent activity (no scans yet)
-      "degraded"  — API responds but a model failed to load
-      "offline"   — Cannot reach FastAPI
-
-    This powers the Module Health Status row on the overview page.
-    """
-    # Try to reach FastAPI health endpoint
-    api_online = False
-    model_statuses = {}
-
-    try:
-        resp = requests.get(f"{_api()}/health", timeout=3)
-        if resp.status_code == 200:
-            api_online     = True
-            model_statuses = resp.json().get("models", {})
-    except Exception:
-        pass
-
-    # Helper: was there any scan in the last 24 hours?
-    yesterday = datetime.utcnow() - timedelta(hours=24)
-
-    def recent_activity(model, date_col):
-        return (
-            db.session.query(func.count(model.id))
-            .filter(date_col >= yesterday)
-            .scalar() or 0
-        ) > 0
-
-    def module_status(model_key: str, has_recent: bool) -> str:
-        if not api_online:
-            return "offline"
-        if model_key and model_statuses.get(model_key) is False:
-            return "degraded"
-        return "online" if has_recent else "idle"
-
-    modules = [
-        {
-            "id":    "email_parser",
-            "name":  "Email Scan",
-            "link":  "/email/scan",
-            "status": module_status(
-                "email_classifier",
-                recent_activity(EmailScan, EmailScan.scanned_at)
+    allowed = cfg.get("allowed_prefixes", ["/"])
+    filtered = []
+    for section in all_items:
+        items = [
+            item for item in section["items"]
+            if any(
+                item["url"] == p or
+                item["url"].startswith(p.rstrip("/") + "/")
+                for p in allowed
             )
+        ]
+        if items:
+            filtered.append({**section, "items": items})
+    return filtered
+
+
+def _all_sidebar_items():
+    return [
+        {
+            "section": "Overview",
+            "items": [
+                {"label": "Dashboard",      "url": "/",              "icon": "🏠"},
+            ],
         },
         {
-            "id":    "url_intel",
-            "name":  "URL Intelligence",
-            "link":  "/url/intel",
-            "status": module_status(
-                "url_malware_detector",
-                recent_activity(URLScan, URLScan.scanned_at)
-            )
+            "section": "Detection Modules",
+            "items": [
+                {"label": "Email Scan",      "url": "/email/scan",    "icon": "✉"},
+                {"label": "URL Intelligence","url": "/url/intel",     "icon": "🔗"},
+                {"label": "Network Scan",    "url": "/network/scan",  "icon": "🌐"},
+                {"label": "Detection Rules", "url": "/rules",         "icon": "📏"},
+                {"label": "ML Classifier",   "url": "/ml/classifier", "icon": "🧠"},
+                {"label": "Attachments",     "url": "/attachments/",  "icon": "📎"},
+                {"label": "Image Analysis",  "url": "/image/analysis","icon": "🖼"},
+                {"label": "AI Detection",    "url": "/ai/detection",  "icon": "🤖"},
+            ],
         },
         {
-            "id":    "network_scan",
-            "name":  "Network Scan",
-            "link":  "/network/scan",
-            "status": module_status(
-                None,
-                recent_activity(NetworkScan, NetworkScan.scanned_at)
-            )
+            "section": "Operations",
+            "items": [
+                {"label": "Platform Monitor","url": "/platform/",     "icon": "📡"},
+                {"label": "Risk Score",      "url": "/risk/",         "icon": "⚖"},
+                {"label": "Live Monitor",    "url": "/monitor/",      "icon": "📺"},
+                {"label": "Alerts & Audit",  "url": "/alerts/",       "icon": "🚨"},
+                {"label": "Extension",       "url": "/extension/",    "icon": "🧩"},
+            ],
         },
         {
-            "id":    "rule_engine",
-            "name":  "Detection Rules",
-            "link":  "/rules",
-            "status": "idle" if api_online else "offline"
+            "section": "Intelligence",
+            "items": [
+                {"label": "Threat Explain",  "url": "/threat/explain","icon": "🌐"},
+            ],
         },
         {
-            "id":    "ml_classifier",
-            "name":  "ML Classifier",
-            "link":  "/ml/classifier",
-            "status": module_status("url_phishing_bert", False)
-        },
-        {
-            "id":    "attachment",
-            "name":  "Attachment Analysis",
-            "link":  "/attachments",
-            "status": module_status(
-                None,
-                recent_activity(AttachmentScan, AttachmentScan.scanned_at)
-            )
-        },
-        {
-            "id":    "image_analysis",
-            "name":  "Image Analysis",
-            "link":  "/image/analysis",
-            "status": "idle" if api_online else "offline"
-        },
-        {
-            "id":    "ai_detection",
-            "name":  "AI Detection",
-            "link":  "/ai/detection",
-            "status": module_status("ai_text_detector", False)
-        },
-        {
-            "id":    "platform_monitor",
-            "name":  "Platform Monitor",
-            "link":  "/platform",
-            "status": "idle" if api_online else "offline"
-        },
-        {
-            "id":    "risk_engine",
-            "name":  "Risk Score",
-            "link":  "/risk",
-            "status": "idle" if api_online else "offline"
-        },
-        {
-            "id":    "live_monitor",
-            "name":  "Live Monitor",
-            "link":  "/monitor",
-            "status": "online" if api_online else "offline"
-        },
-        {
-            "id":    "model_mgmt",
-            "name":  "Model Management",
-            "link":  "/models",
-            "status": module_status("threat_summarizer", False)
-        },
-        {
-            "id":    "alerts",
-            "name":  "Alerts & Audit",
-            "link":  "/alerts",
-            "status": module_status(
-                None,
-                recent_activity(Alert, Alert.created_at)
-            )
-        },
-        {
-            "id":    "extension",
-            "name":  "Extension",
-            "link":  "/extension",
-            "status": "idle" if api_online else "offline"
-        },
-        {
-            "id":    "architecture",
-            "name":  "Architecture",
-            "link":  "/architecture",
-            "status": "online" if api_online else "offline"
-        },
-        {
-            "id":    "threat_explain",
-            "name":  "Threat Explanation",
-            "link":  "/threat/explain",
-            "status": module_status("threat_summarizer", False)
+            "section": "Administration",
+            "items": [
+                {"label": "Model Management","url": "/models/",       "icon": "📦"},
+                {"label": "Architecture",    "url": "/architecture/", "icon": "🏗"},
+            ],
         },
     ]
 
-    return modules
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Role selector routes
+# ─────────────────────────────────────────────────────────────────────────────
 
-def _top_risky_domains(limit: int = 8) -> list:
-    """
-    Return the domains with the highest average ML risk score
-    from URL scans, limited to scans from the last 7 days.
-    Used for the "Top risky domains today" panel.
-    """
-    seven_days_ago = datetime.utcnow() - timedelta(days=7)
-
-    rows = (
-        db.session.query(
-            URLScan.domain,
-            func.avg(URLScan.ml_score).label("avg_score"),
-            func.count(URLScan.id).label("scan_count")
-        )
-        .filter(
-            URLScan.scanned_at >= seven_days_ago,
-            URLScan.domain != None,
-            URLScan.domain != ""
-        )
-        .group_by(URLScan.domain)
-        .order_by(func.avg(URLScan.ml_score).desc())
-        .limit(limit)
-        .all()
+@dashboard_bp.route("/role/select")
+def role_select():
+    return render_template(
+        "role_select.html",
+        roles=ROLES,
     )
 
-    return [{
-        "domain":     row.domain,
-        "avg_score":  round((row.avg_score or 0) * 100, 1),
-        "scan_count": row.scan_count,
-        "label": (
-            "MALICIOUS"  if (row.avg_score or 0) >= 0.70 else
-            "SUSPICIOUS" if (row.avg_score or 0) >= 0.30 else
-            "BENIGN"
-        )
-    } for row in rows]
+
+@dashboard_bp.route("/role/set", methods=["POST"])
+def role_set():
+    role = request.form.get("role", "").strip()
+    if role not in ROLES:
+        return redirect(url_for("dashboard_bp.role_select"))
+    session["role"]       = role
+    session["role_label"] = ROLES[role]["label"]
+    session["role_icon"]  = ROLES[role]["icon"]
+    return redirect(url_for("dashboard_bp.overview"))
 
 
-def _scan_trend_last_7_days() -> list:
+@dashboard_bp.route("/role/clear")
+def role_clear():
+    session.clear()
+    return redirect(url_for("dashboard_bp.role_select"))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Overview dashboard
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dashboard_bp.route("/")
+@role_required
+def overview():
+    role        = get_current_role()
+    role_cfg    = ROLES.get(role, {})
+    sidebar     = get_sidebar_config()
+    return render_template(
+        "dashboard.html",
+        role=role,
+        role_label=role_cfg.get("label", ""),
+        role_icon=role_cfg.get("icon",  ""),
+        sidebar=sidebar,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dashboard widget API endpoints (called by JS every 5 seconds)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dashboard_bp.route("/dashboard/stats")
+@role_required
+def dashboard_stats():
     """
-    Return daily scan counts for the last 7 days.
-    Used to draw the sparkline/bar chart on the overview page.
-
-    Returns a list of 7 dicts: [{date: "YYYY-MM-DD", count: N}, ...]
-    ordered oldest-first so Chart.js can plot them left-to-right.
+    Returns all widget data in one call:
+    scan counts, threat distribution, live feed, top domains, alerts.
     """
-    trend = []
-    for days_ago in range(6, -1, -1):  # 6 days ago → today
-        day = date.today() - timedelta(days=days_ago)
-
-        email_count = (
-            db.session.query(func.count(EmailScan.id))
-            .filter(cast(EmailScan.scanned_at, Date) == day)
-            .scalar() or 0
-        )
-        url_count = (
-            db.session.query(func.count(URLScan.id))
-            .filter(cast(URLScan.scanned_at, Date) == day)
-            .scalar() or 0
+    try:
+        today      = datetime.datetime.utcnow().replace(
+            hour=0, minute=0, second=0, microsecond=0
         )
 
-        trend.append({
-            "date":   day.strftime("%Y-%m-%d"),
-            "label":  day.strftime("%d %b"),
-            "emails": email_count,
-            "urls":   url_count,
-            "total":  email_count + url_count
+        # ── Scan counts today ──────────────────────────────────────────────
+        counts = {
+            "email":      EmailScan.query.filter(
+                EmailScan.scanned_at >= today).count(),
+            "url":        URLScan.query.filter(
+                URLScan.scanned_at >= today).count(),
+            "network":    NetworkScan.query.filter(
+                NetworkScan.scanned_at >= today).count(),
+            "attachment": AttachmentScan.query.filter(
+                AttachmentScan.scanned_at >= today).count(),
+            "ai":         AIDetectionScan.query.filter(
+                AIDetectionScan.scanned_at >= today).count(),
+            "image":      ImageAnalysisScan.query.filter(
+                ImageAnalysisScan.scanned_at >= today).count(),
+        }
+        counts["total"] = sum(counts.values())
+
+        # ── Threat distribution (all time) ─────────────────────────────────
+        distribution = _get_threat_distribution()
+
+        # ── Live feed (last 10) ────────────────────────────────────────────
+        live_feed = _get_live_feed(limit=10)
+
+        # ── Top risky domains today ────────────────────────────────────────
+        top_domains = _get_top_risky_domains(today, limit=5)
+
+        # ── Recent alerts ──────────────────────────────────────────────────
+        recent_alerts = _recent_alerts(limit=5)
+
+        return jsonify({
+            "status":       "success",
+            "counts":       counts,
+            "distribution": distribution,
+            "live_feed":    live_feed,
+            "top_domains":  top_domains,
+            "alerts":       recent_alerts,
+            "timestamp":    datetime.datetime.utcnow().isoformat() + "Z",
         })
 
-    return trend
+    except Exception as ex:
+        logger.error("Dashboard stats error: %s", ex)
+        return jsonify({"status": "error", "message": str(ex)}), 500
+
+
+@dashboard_bp.route("/dashboard/health")
+@role_required
+def dashboard_health():
+    """Module health status row — proxies to FastAPI health endpoint."""
+    try:
+        resp = http_requests.get(
+            f"{FASTAPI_BASE}/api/architecture/health",
+            timeout=PROXY_TIMEOUT,
+        )
+        return jsonify(resp.json()), resp.status_code
+    except Exception as ex:
+        return jsonify({"status": "error", "message": str(ex)}), 502
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Widget helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_threat_distribution() -> dict:
+    """Count Safe / Suspicious / Malicious across all scan tables."""
+    safe = suspicious = malicious = 0
+
+    def _tally(verdict: str) -> tuple:
+        v = (verdict or "").upper()
+        if v in ("SAFE", "CLEAN", "LOW", "HUMAN", "BENIGN"):
+            return 1, 0, 0
+        if v in ("SUSPICIOUS", "MIXED", "MEDIUM"):
+            return 0, 1, 0
+        if v in ("MALICIOUS", "HIGH", "CRITICAL", "PHISHING", "AI_GENERATED"):
+            return 0, 0, 1
+        return 0, 0, 0
+
+    try:
+        for r in EmailScan.query.with_entities(EmailScan.label).all():
+            s, su, m = _tally(r.label)
+            safe += s; suspicious += su; malicious += m
+    except Exception:
+        pass
+
+    try:
+        for r in URLScan.query.with_entities(URLScan.final_label).all():
+            s, su, m = _tally(r.final_label)
+            safe += s; suspicious += su; malicious += m
+    except Exception:
+        pass
+
+    try:
+        for r in AttachmentScan.query.with_entities(AttachmentScan.verdict).all():
+            s, su, m = _tally(r.verdict)
+            safe += s; suspicious += su; malicious += m
+    except Exception:
+        pass
+
+    try:
+        for r in AIDetectionScan.query.with_entities(AIDetectionScan.verdict).all():
+            s, su, m = _tally(r.verdict)
+            safe += s; suspicious += su; malicious += m
+    except Exception:
+        pass
+
+    try:
+        for r in ImageAnalysisScan.query.with_entities(
+            ImageAnalysisScan.verdict
+        ).all():
+            s, su, m = _tally(r.verdict)
+            safe += s; suspicious += su; malicious += m
+    except Exception:
+        pass
+
+    return {
+        "safe":       safe,
+        "suspicious": suspicious,
+        "malicious":  malicious,
+        "total":      safe + suspicious + malicious,
+    }
+
+
+def _get_live_feed(limit: int = 10) -> list:
+    """Return the most recent scans across all modules."""
+    feed = []
+
+    try:
+        for r in (EmailScan.query
+                  .order_by(EmailScan.scanned_at.desc())
+                  .limit(limit).all()):
+            feed.append({
+                "module":     "Email",
+                "icon":       "✉",
+                "ref":        (r.sender or r.subject or "—")[:60],
+                "risk_score": float(r.risk_score or 0),
+                "verdict":    r.label or "UNKNOWN",
+                "scanned_at": r.scanned_at.isoformat() + "Z"
+                              if r.scanned_at else "",
+            })
+    except Exception:
+        pass
+
+    try:
+        for r in (URLScan.query
+                  .order_by(URLScan.scanned_at.desc())
+                  .limit(limit).all()):
+            score = float(r.ml_score or 0)
+            if score <= 1.0:
+                score = score * 100.0
+            feed.append({
+                "module":     "URL",
+                "icon":       "🔗",
+                "ref":        (r.domain or r.raw_url or "—")[:60],
+                "risk_score": round(score, 1),
+                "verdict":    r.final_label or "UNKNOWN",
+                "scanned_at": r.scanned_at.isoformat() + "Z"
+                              if r.scanned_at else "",
+            })
+    except Exception:
+        pass
+
+    try:
+        for r in (AttachmentScan.query
+                  .order_by(AttachmentScan.scanned_at.desc())
+                  .limit(limit).all()):
+            feed.append({
+                "module":     "Attachment",
+                "icon":       "📎",
+                "ref":        (r.filename or "—")[:60],
+                "risk_score": 0.0,
+                "verdict":    r.verdict or "UNKNOWN",
+                "scanned_at": r.scanned_at.isoformat() + "Z"
+                              if r.scanned_at else "",
+            })
+    except Exception:
+        pass
+
+    try:
+        for r in (AIDetectionScan.query
+                  .order_by(AIDetectionScan.scanned_at.desc())
+                  .limit(limit).all()):
+            feed.append({
+                "module":     "AI Detection",
+                "icon":       "🤖",
+                "ref":        (r.source_ref or
+                               r.input_preview or "—")[:60],
+                "risk_score": float(r.risk_score or 0),
+                "verdict":    r.verdict or "UNKNOWN",
+                "scanned_at": r.scanned_at.isoformat() + "Z"
+                              if r.scanned_at else "",
+            })
+    except Exception:
+        pass
+
+    try:
+        for r in (ImageAnalysisScan.query
+                  .order_by(ImageAnalysisScan.scanned_at.desc())
+                  .limit(limit).all()):
+            feed.append({
+                "module":     "Image",
+                "icon":       "🖼",
+                "ref":        (r.filename or "—")[:60],
+                "risk_score": float(r.risk_score or 0),
+                "verdict":    r.verdict or "UNKNOWN",
+                "scanned_at": r.scanned_at.isoformat() + "Z"
+                              if r.scanned_at else "",
+            })
+    except Exception:
+        pass
+
+    feed.sort(key=lambda x: x["scanned_at"], reverse=True)
+    return feed[:limit]
+
+
+def _get_top_risky_domains(today: datetime.datetime,
+                           limit: int = 5) -> list:
+    """Return top domains by risk score from today's URL scans."""
+    try:
+        rows = (
+            URLScan.query
+            .filter(URLScan.scanned_at >= today)
+            .filter(URLScan.domain != "")
+            .order_by(URLScan.ml_score.desc())
+            .limit(limit * 3)
+            .all()
+        )
+        seen    = set()
+        domains = []
+        for r in rows:
+            domain = r.domain or ""
+            if not domain or domain in seen:
+                continue
+            seen.add(domain)
+            score = float(r.ml_score or 0)
+            if score <= 1.0:
+                score = score * 100.0
+            domains.append({
+                "domain":    domain,
+                "risk_score":round(score, 1),
+                "verdict":   r.final_label or "UNKNOWN",
+            })
+            if len(domains) >= limit:
+                break
+        return domains
+    except Exception as ex:
+        logger.warning("Top domains error: %s", ex)
+        return []
+
+
+def _recent_alerts(limit: int = 5) -> list:
+    """Return recent open alerts for the dashboard panel."""
+    try:
+        rows = (
+            Alert.query
+            .filter(Alert.status == "open")
+            .order_by(Alert.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "id":           r.id,
+                "module":       r.module,
+                "severity":     r.severity,
+                "verdict":      r.verdict,
+                "risk_score":   r.risk_score,
+                "summary":      (r.threat_summary or "")[:120],
+                "detail":       (r.threat_summary or "")[:80],
+                "status":       r.status,
+                "created_at":   r.created_at.isoformat() + "Z"
+                                if r.created_at else "",
+            }
+            for r in rows
+        ]
+    except Exception as ex:
+        logger.warning("Recent alerts error: %s", ex)
+        return []

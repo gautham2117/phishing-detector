@@ -63,6 +63,12 @@ from backend.modules.system_health import (
     get_request_rate_history,
     get_migration_plan,
 )
+from backend.modules.translation import (
+    generate_explanation,
+    translate_explanation,
+    get_security_tips,
+    get_supported_languages,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1797,6 +1803,142 @@ async def architecture_migration_plan():
     try:
         plan = get_migration_plan()
         return {"status": "success", "plan": plan}
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+    
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 16 — Multi-Language Threat Explanation & Awareness Engine
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ExplainRequest(PydanticBase):
+    text:       str
+    verdict:    Optional[str] = ""
+    module:     Optional[str] = ""
+    risk_score: Optional[float] = 0.0
+
+
+class TranslateRequest(PydanticBase):
+    text:      str
+    lang_code: str
+
+
+class TipsRequest(PydanticBase):
+    verdict:  Optional[str] = ""
+    module:   Optional[str] = ""
+    raw_text: Optional[str] = ""
+
+
+@router.post(
+    "/threat/explain",
+    summary="Generate plain-language threat explanation using BART",
+    tags=["Threat Explanation"]
+)
+async def threat_explain(req: ExplainRequest):
+    """
+    Generate a plain-language 2-3 sentence explanation of a threat
+    using BART (facebook/bart-large-cnn).
+    Falls back to rule-based explanation if model unavailable.
+    """
+    try:
+        explanation = generate_explanation(
+            raw_text   = req.text,
+            verdict    = req.verdict    or "",
+            module     = req.module     or "",
+            risk_score = req.risk_score or 0.0,
+        )
+        tips = get_security_tips(
+            verdict  = req.verdict  or "",
+            module   = req.module   or "",
+            raw_text = req.text,
+        )
+        return {
+            "status":      "success",
+            "explanation": explanation,
+            "tips":        tips,
+            "verdict":     req.verdict,
+            "module":      req.module,
+            "risk_score":  req.risk_score,
+        }
+    except Exception as e:
+        logger.error(f"Threat explain error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.post(
+    "/threat/translate",
+    summary="Translate threat explanation into target language",
+    tags=["Threat Explanation"]
+)
+async def threat_translate(req: TranslateRequest):
+    """
+    Translate English threat text into the requested language
+    using Helsinki-NLP MarianMT model (lazy-loaded on first request).
+    """
+    try:
+        if not req.text or not req.lang_code:
+            raise HTTPException(
+                status_code=400,
+                detail="Both 'text' and 'lang_code' are required."
+            )
+        result = translate_explanation(
+            text      = req.text,
+            lang_code = req.lang_code,
+        )
+        return {"status": "success", "result": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Threat translate error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.post(
+    "/threat/tips",
+    summary="Get security awareness tips for detected threat type",
+    tags=["Threat Explanation"]
+)
+async def threat_tips(req: TipsRequest):
+    """
+    Return tailored security awareness tips based on
+    verdict, module, and detected threat content.
+    """
+    try:
+        tips = get_security_tips(
+            verdict  = req.verdict  or "",
+            module   = req.module   or "",
+            raw_text = req.raw_text or "",
+        )
+        return {"status": "success", "tips": tips}
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/threat/languages",
+    summary="List all supported translation languages",
+    tags=["Threat Explanation"]
+)
+async def threat_languages():
+    """Return metadata for all supported translation languages."""
+    try:
+        languages = get_supported_languages()
+        return {
+            "status":    "success",
+            "languages": languages,
+            "total":     len(languages),
+        }
     except Exception as e:
         return JSONResponse(
             status_code=500,

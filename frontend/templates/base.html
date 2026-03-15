@@ -3,87 +3,83 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}Phishing Detector{% endblock %} — Threat Monitor</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
-  <!-- Chart.js for dashboard graphs -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <title>{% block title %}PhishGuard{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/main.css">
+  {% block head %}{% endblock %}
 </head>
 <body>
 
-<!-- ── Sidebar navigation ── -->
-<nav class="sidebar">
-  <div class="sidebar-logo">
-    <span class="logo-icon">&#9670;</span>
-    <span class="logo-text">ThreatWatch</span>
+<!-- ── Sidebar ─────────────────────────────────────────────────────────────── -->
+<aside class="sidebar" id="sidebar">
+
+  <div class="sidebar-brand">
+    <span class="sidebar-logo">🛡</span>
+    <span class="sidebar-title">PhishGuard</span>
   </div>
 
-  <div class="nav-section-label">Dashboard</div>
-  <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">
-    Overview
-  </a>
+  <!-- Role badge -->
+  <div class="sidebar-role-badge">
+    <span id="sidebarRoleIcon">{{ session.get('role_icon', '?') }}</span>
+    <span id="sidebarRoleLabel">{{ session.get('role_label', 'No Role') }}</span>
+    <a href="/role/clear" class="sidebar-role-switch" title="Switch role">⇄</a>
+  </div>
 
-  <div class="nav-section-label">Detection Modules</div>
-  <a href="/email/scan"    class="nav-link {% if '/email' in request.path %}active{% endif %}">
-    Email Scan
-  </a>
-  <a href="/url/intel"     class="nav-link {% if '/url' in request.path %}active{% endif %}">
-    URL Intelligence
-  </a>
-  <a href="/network/scan"  class="nav-link {% if '/network' in request.path %}active{% endif %}">
-    Network Scan
-  </a>
-  <a href="/rules"         class="nav-link {% if '/rules' in request.path %}active{% endif %}">
-    Detection Rules
-  </a>
-  <a href="/ml/classifier" class="nav-link {% if '/ml' in request.path %}active{% endif %}">
-    ML Classifier
-  </a>
-  <a href="/attachments"   class="nav-link {% if '/attach' in request.path %}active{% endif %}">
-    Attachment Analysis
-  </a>
-  <a href="/image/analysis" class="nav-link {% if '/image' in request.path %}active{% endif %}">
-    Image Analysis
-  </a>
-  <a href="/ai/detection"  class="nav-link {% if '/ai' in request.path %}active{% endif %}">
-    AI Detection
-  </a>
-  <a href="/platform"      class="nav-link {% if '/platform' in request.path %}active{% endif %}">
-    Platform Monitor
-  </a>
+  <nav class="sidebar-nav">
+    {% for section in sidebar %}
+    <div class="sidebar-section-label">{{ section.section }}</div>
+    {% for item in section.items %}
+    <a href="{{ item.url }}"
+       class="sidebar-link {% if request.path == item.url or request.path.startswith(item.url.rstrip('/') + '/') %}active{% endif %}">
+      <span class="sidebar-link-icon">{{ item.icon }}</span>
+      <span class="sidebar-link-label">{{ item.label }}</span>
+    </a>
+    {% endfor %}
+    {% endfor %}
+  </nav>
 
-  <div class="nav-section-label">Intelligence</div>
-  <a href="/risk"          class="nav-link {% if '/risk' in request.path %}active{% endif %}">
-    Risk Score
-  </a>
-  <a href="/monitor"       class="nav-link {% if '/monitor' in request.path %}active{% endif %}">
-    Live Monitor
-  </a>
-  <a href="/alerts"        class="nav-link {% if '/alerts' in request.path %}active{% endif %}">
-    Alerts &amp; Audit
-  </a>
-  <a href="/threat/explain" class="nav-link {% if '/threat' in request.path %}active{% endif %}">
-    Threat Explanation
-  </a>
+  <div class="sidebar-footer">
+    <span class="sidebar-version">v1.0.0 · Phase 17</span>
+  </div>
 
-  <div class="nav-section-label">System</div>
-  <a href="/models"        class="nav-link {% if '/models' in request.path %}active{% endif %}">
-    Model Management
-  </a>
-  <a href="/extension"     class="nav-link {% if '/extension' in request.path %}active{% endif %}">
-    Extension &amp; Integrations
-  </a>
-  <a href="/architecture"  class="nav-link {% if '/arch' in request.path %}active{% endif %}">
-    System Architecture
-  </a>
-</nav>
+</aside>
 
-<!-- ── Main content area ── -->
-<main class="main-content">
-  {% block content %}{% endblock %}
+<!-- ── Main content ────────────────────────────────────────────────────────── -->
+<main class="main-content" id="mainContent">
+
+  <!-- Top bar -->
+  <header class="topbar">
+    <button class="topbar-toggle" id="sidebarToggle" onclick="toggleSidebar()">☰</button>
+    <div class="topbar-title">{% block page_title %}{% endblock %}</div>
+    <div class="topbar-right">
+      <span class="topbar-role">
+        {{ session.get('role_icon', '') }}
+        {{ session.get('role_label', '') }}
+      </span>
+    </div>
+  </header>
+
+  <div class="content-area">
+    {% block content %}{% endblock %}
+  </div>
+
 </main>
 
-<!-- Per-page JS -->
-<script src="{{ url_for('static', filename='js/scan_ui.js') }}"></script>
-{% block extra_scripts %}{% endblock %}
+<script>
+"use strict";
+function toggleSidebar() {
+  var sidebar = document.getElementById("sidebar");
+  var main    = document.getElementById("mainContent");
+  sidebar.classList.toggle("collapsed");
+  main.classList.toggle("expanded");
+}
+// Highlight active link
+document.querySelectorAll(".sidebar-link").forEach(function (link) {
+  if (link.getAttribute("href") === window.location.pathname) {
+    link.classList.add("active");
+  }
+});
+</script>
+
+{% block scripts %}{% endblock %}
 </body>
 </html>

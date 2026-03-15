@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Access Denied — PhishGuard{% endblock %}
+{% block content %}
+<div style="display:flex;flex-direction:column;align-items:center;
+            justify-content:center;min-height:60vh;gap:16px;text-align:center">
+  <div style="font-size:3rem">🚫</div>
+  <h1 style="color:var(--red);font-size:1.4rem">Access Denied</h1>
+  <p style="color:var(--text-muted);max-width:400px">
+    Your current role (<strong style="color:var(--text)">{{ role }}</strong>)
+    does not have permission to access
+    <code style="color:var(--blue)">{{ path }}</code>.
+  </p>
+  <div style="display:flex;gap:12px;margin-top:8px">
+    <a href="/" class="btn btn-primary" style="text-decoration:none;padding:8px 20px">
+      ← Back to Dashboard
+    </a>
+    <a href="/role/clear"
+       style="color:var(--text-muted);font-size:.85rem;
+              align-self:center;text-decoration:underline">
+      Switch Role
+    </a>
+  </div>
+</div>
+{% endblock %}
