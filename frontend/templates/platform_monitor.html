@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Platform Monitor — PhishGuard{% endblock %}
+
+{% block content %}
+<!-- Data island -->
+<div id="page-data"
+     data-add-url="/platform/targets/add"
+     data-remove-url="/platform/targets"
+     data-scan-url="/platform/targets"
+     data-list-url="/platform/targets"
+     data-feed-url="/platform/feed"
+     data-poll-url="/platform/poll"
+     data-history-url="/platform/targets"
+     style="display:none"></div>
+
+<div class="page-header">
+  <h1 class="page-title">
+    <span class="title-icon">📡</span>
+    Platform Monitor
+  </h1>
+  <p class="page-subtitle">
+    Watchlist · Scheduled rescanning · Unified threat feed ·
+    Risk score history · Multi-phase analysis
+  </p>
+</div>
+
+<!-- ── Alert banner (shown when alerts fire during polling) ───────────────── -->
+<div class="pm-alert-banner" id="pmAlertBanner" style="display:none">
+  <span class="pm-alert-icon">🚨</span>
+  <span id="pmAlertText"></span>
+  <button class="pm-alert-close" id="pmAlertClose">✕</button>
+</div>
+
+<!-- ── Add target form ────────────────────────────────────────────────────── -->
+<div class="card pm-add-card">
+  <div class="card-header">
+    <span class="card-icon">➕</span>
+    <span class="card-title">Add Target to Watchlist</span>
+  </div>
+  <div class="card-body">
+    <div class="pm-add-form">
+      <div class="pm-field">
+        <label class="form-label">URL / Domain</label>
+        <input type="text" id="pmUrl" class="form-input"
+               placeholder="https://example.com or example.com">
+      </div>
+      <div class="pm-field">
+        <label class="form-label">Label</label>
+        <input type="text" id="pmLabel" class="form-input"
+               placeholder="e.g. Suspicious PayPal Clone">
+      </div>
+      <div class="pm-field pm-field-sm">
+        <label class="form-label">Rescan Every (mins)</label>
+        <input type="number" id="pmInterval" class="form-input"
+               value="60" min="1" max="1440">
+      </div>
+      <div class="pm-field pm-field-sm">
+        <label class="form-label">Alert Threshold (0–100)</label>
+        <input type="number" id="pmThreshold" class="form-input"
+               value="50" min="0" max="100">
+      </div>
+      <button class="btn btn-primary pm-add-btn" id="pmAddBtn">
+        Add to Watchlist
+      </button>
+    </div>
+    <div class="ai-error" id="pmAddError" style="display:none"></div>
+  </div>
+</div>
+
+<!-- ── Watchlist table ────────────────────────────────────────────────────── -->
+<div class="card" style="margin-bottom:20px">
+  <div class="card-header">
+    <span class="card-icon">👁</span>
+    <span class="card-title">Watchlist</span>
+    <span class="att-count-badge" id="pmWatchCount">0</span>
+    <span class="att-poll-indicator">● AUTO-SCAN</span>
+  </div>
+  <div class="card-body" style="padding:0">
+    <div class="table-wrapper">
+      <table class="data-table" id="pmWatchTable">
+        <thead>
+          <tr>
+            <th>Label</th>
+            <th>Domain</th>
+            <th>Interval</th>
+            <th>Threshold</th>
+            <th>Last Scanned</th>
+            <th>Risk Score</th>
+            <th>Verdict</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="pmWatchBody">
+          <tr>
+            <td colspan="8" class="att-empty-row">
+              No targets in watchlist yet.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ── Risk score history chart (shown when a target is selected) ─────────── -->
+<div class="card pm-history-card" id="pmHistoryCard" style="display:none">
+  <div class="card-header">
+    <span class="card-icon">📈</span>
+    <span class="card-title">
+      Risk Score History —
+      <span id="pmHistoryLabel"></span>
+    </span>
+    <button class="pm-close-btn" id="pmHistoryClose">✕ Close</button>
+  </div>
+  <div class="card-body">
+    <canvas id="pmHistoryChart" height="80"></canvas>
+    <div class="pm-history-stats">
+      <div class="ai-stat">
+        <span class="ai-stat-label">Scans</span>
+        <span class="ai-stat-val" id="pmHistTotal">—</span>
+      </div>
+      <div class="ai-stat">
+        <span class="ai-stat-label">Avg Risk</span>
+        <span class="ai-stat-val" id="pmHistAvg">—</span>
+      </div>
+      <div class="ai-stat">
+        <span class="ai-stat-label">Alerts Fired</span>
+        <span class="ai-stat-val pm-stat-alert" id="pmHistAlerts">—</span>
+      </div>
+      <div class="ai-stat">
+        <span class="ai-stat-label">Last Verdict</span>
+        <span class="ai-stat-val" id="pmHistVerdict">—</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Unified threat feed ────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-icon">🌊</span>
+    <span class="card-title">Unified Threat Feed</span>
+    <span class="att-poll-indicator">● LIVE</span>
+  </div>
+  <div class="card-body" style="padding:0">
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Module</th>
+            <th>Reference</th>
+            <th>Risk Score</th>
+            <th>Verdict</th>
+            <th>Scanned</th>
+          </tr>
+        </thead>
+        <tbody id="pmFeedBody">
+          <tr>
+            <td colspan="5" class="att-empty-row">
+              Loading threat feed…
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/static/js/platform_monitor.js"></script>
+{% endblock %}

@@ -39,6 +39,9 @@ from backend.modules.ai_detector import (
     extract_text_from_file,
 )
 from backend.modules.image_analyzer import analyze_image
+from backend.modules.platform_monitor import (
+    scan_target_full, extract_domain, get_due_targets, get_unified_feed
+)
 
 
 logger = logging.getLogger(__name__)
@@ -1394,3 +1397,275 @@ def _save_ai_detection_scan(result: dict) -> Optional[int]:
         logger.error(f"AIDetectionScan DB save error: {e}")
         db.session.rollback()
         return None
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 9 — Platform Monitor
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AddTargetRequest(PydanticBase):
+    url:              str
+    label:            Optional[str] = ""
+    interval_minutes: int           = 60
+    alert_threshold:  float         = 50.0
+
+
+@router.post(
+    "/platform/targets",
+    summary="Add a URL to the monitoring watchlist",
+    tags=["Platform Monitor"]
+)
+async def add_monitor_target(req: AddTargetRequest):
+    try:
+        import datetime
+        from backend.app.models import MonitoredTarget
+
+        domain = extract_domain(req.url)
+        target = MonitoredTarget(
+            url              = req.url[:2048],
+            domain           = domain[:255],
+            label            = (req.label or domain)[:255],
+            interval_minutes = max(1, req.interval_minutes),
+            alert_threshold  = max(0.0, min(100.0, req.alert_threshold)),
+            is_active        = True,
+            created_at       = datetime.datetime.utcnow(),
+        )
+        db.session.add(target)
+        db.session.commit()
+        return {"status": "success", "target_id": target.id,
+                "message": f"Target '{target.label}' added to watchlist."}
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Add monitor target error: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content=error_response(str(e)))
+
+
+@router.delete(
+    "/platform/targets/{target_id}",
+    summary="Remove a target from the watchlist",
+    tags=["Platform Monitor"]
+)
+async def remove_monitor_target(target_id: int):
+    try:
+        from backend.app.models import MonitoredTarget
+        target = db.session.get(MonitoredTarget, target_id)
+        if not target:
+            raise HTTPException(status_code=404, detail="Target not found.")
+        db.session.delete(target)
+        db.session.commit()
+        return {"status": "success", "message": "Target removed."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.session.rollback()
+        return JSONResponse(status_code=500, content=error_response(str(e)))
+
+
+@router.post(
+    "/platform/targets/{target_id}/scan",
+    summary="Manually trigger a scan for a monitored target",
+    tags=["Platform Monitor"]
+)
+async def manual_scan_target(target_id: int):
+    try:
+        import datetime
+        from backend.app.models import MonitoredTarget, MonitorScanResult
+
+        target = db.session.get(MonitoredTarget, target_id)
+        if not target:
+            raise HTTPException(status_code=404, detail="Target not found.")
+
+        result     = scan_target_full(target.url)
+        alert_fired= result["risk_score"] >= target.alert_threshold
+
+        scan = MonitorScanResult(
+            target_id    = target.id,
+            risk_score   = result["risk_score"],
+            verdict      = result["verdict"],
+            url_score    = result["url_score"],
+            rules_score  = result["rules_score"],
+            ml_score     = result["ml_score"],
+            alert_fired  = alert_fired,
+            scan_summary = result["summary"],
+            scanned_at   = datetime.datetime.utcnow(),
+        )
+        db.session.add(scan)
+
+        target.last_scanned    = scan.scanned_at
+        target.last_risk_score = result["risk_score"]
+        target.last_verdict    = result["verdict"]
+        db.session.commit()
+
+        return {
+            "status":      "success",
+            "target_id":   target_id,
+            "risk_score":  result["risk_score"],
+            "verdict":     result["verdict"],
+            "alert_fired": alert_fired,
+            "summary":     result["summary"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Manual scan error: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content=error_response(str(e)))
+
+
+@router.get(
+    "/platform/targets",
+    summary="List all monitored targets",
+    tags=["Platform Monitor"]
+)
+async def list_monitor_targets():
+    try:
+        from backend.app.models import MonitoredTarget
+        targets = MonitoredTarget.query.order_by(
+            MonitoredTarget.created_at.desc()
+        ).all()
+        return {
+            "status":  "success",
+            "targets": [_serialize_target(t) for t in targets],
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content=error_response(str(e)))
+
+
+@router.get(
+    "/platform/targets/{target_id}/history",
+    summary="Get scan history for a monitored target",
+    tags=["Platform Monitor"]
+)
+async def target_scan_history(target_id: int, limit: int = 20):
+    try:
+        from backend.app.models import MonitorScanResult
+        rows = (
+            MonitorScanResult.query
+            .filter_by(target_id=target_id)
+            .order_by(MonitorScanResult.scanned_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return {
+            "status":  "success",
+            "history": [_serialize_scan_result(r) for r in rows],
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content=error_response(str(e)))
+
+
+@router.get(
+    "/platform/feed",
+    summary="Unified threat feed from all modules",
+    tags=["Platform Monitor"]
+)
+async def unified_feed(limit: int = 50):
+    try:
+        feed = get_unified_feed(limit=limit)
+        return {"status": "success", "feed": feed, "total": len(feed)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content=error_response(str(e)))
+
+
+@router.post(
+    "/platform/poll",
+    summary="Check for due targets and rescan them",
+    tags=["Platform Monitor"]
+)
+async def poll_due_targets():
+    """
+    Called by the dashboard JS every 30 seconds.
+    Finds targets that are due for rescanning and runs them.
+    Returns count of targets scanned and any alerts fired.
+    """
+    try:
+        import datetime
+        from backend.app.models import MonitoredTarget, MonitorScanResult
+
+        now      = datetime.datetime.utcnow()
+        targets  = MonitoredTarget.query.filter_by(is_active=True).all()
+        scanned  = []
+        alerts   = []
+
+        for t in targets:
+            due = False
+            if t.last_scanned is None:
+                due = True
+            else:
+                delta = (now - t.last_scanned).total_seconds() / 60
+                if delta >= t.interval_minutes:
+                    due = True
+
+            if not due:
+                continue
+
+            result      = scan_target_full(t.url)
+            alert_fired = result["risk_score"] >= t.alert_threshold
+
+            scan = MonitorScanResult(
+                target_id    = t.id,
+                risk_score   = result["risk_score"],
+                verdict      = result["verdict"],
+                url_score    = result["url_score"],
+                rules_score  = result["rules_score"],
+                ml_score     = result["ml_score"],
+                alert_fired  = alert_fired,
+                scan_summary = result["summary"],
+                scanned_at   = now,
+            )
+            db.session.add(scan)
+            t.last_scanned    = now
+            t.last_risk_score = result["risk_score"]
+            t.last_verdict    = result["verdict"]
+
+            scanned.append({"target_id": t.id, "label": t.label,
+                            "risk_score": result["risk_score"]})
+            if alert_fired:
+                alerts.append({"target_id": t.id, "label": t.label,
+                               "risk_score": result["risk_score"],
+                               "verdict": result["verdict"]})
+
+        db.session.commit()
+        return {
+            "status":         "success",
+            "scanned_count":  len(scanned),
+            "alert_count":    len(alerts),
+            "scanned":        scanned,
+            "alerts":         alerts,
+        }
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Poll due targets error: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content=error_response(str(e)))
+
+
+# ── Phase 9 serializers ───────────────────────────────────────────────────────
+
+def _serialize_target(t) -> dict:
+    return {
+        "id":               t.id,
+        "url":              t.url,
+        "domain":           t.domain,
+        "label":            t.label,
+        "interval_minutes": t.interval_minutes,
+        "alert_threshold":  t.alert_threshold,
+        "last_scanned":     t.last_scanned.isoformat() + "Z" if t.last_scanned else None,
+        "last_risk_score":  t.last_risk_score,
+        "last_verdict":     t.last_verdict,
+        "is_active":        t.is_active,
+        "created_at":       t.created_at.isoformat() + "Z" if t.created_at else "",
+    }
+
+
+def _serialize_scan_result(r) -> dict:
+    return {
+        "id":           r.id,
+        "target_id":    r.target_id,
+        "risk_score":   r.risk_score,
+        "verdict":      r.verdict,
+        "url_score":    r.url_score,
+        "rules_score":  r.rules_score,
+        "ml_score":     r.ml_score,
+        "alert_fired":  r.alert_fired,
+        "scan_summary": r.scan_summary,
+        "scanned_at":   r.scanned_at.isoformat() + "Z" if r.scanned_at else "",
+    }

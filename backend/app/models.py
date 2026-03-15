@@ -258,3 +258,37 @@ class ImageAnalysisScan(db.Model):
     verdict          = db.Column(db.String(30),  default="CLEAN")
     risk_score       = db.Column(db.Float,       default=0.0)
     scanned_at       = db.Column(db.DateTime,    default=datetime.utcnow)
+
+class MonitoredTarget(db.Model):
+    __tablename__ = "monitored_targets"
+
+    id               = db.Column(db.Integer,     primary_key=True)
+    url              = db.Column(db.String(2048), default="")
+    domain           = db.Column(db.String(255),  default="")
+    label            = db.Column(db.String(255),  default="")
+    interval_minutes = db.Column(db.Integer,      default=60)
+    alert_threshold  = db.Column(db.Float,        default=50.0)
+    last_scanned     = db.Column(db.DateTime,     nullable=True)
+    last_risk_score  = db.Column(db.Float,        default=0.0)
+    last_verdict     = db.Column(db.String(30),   default="UNKNOWN")
+    is_active        = db.Column(db.Boolean,      default=True)
+    created_at       = db.Column(db.DateTime,     default=datetime.utcnow)
+    scan_results     = db.relationship(
+        "MonitorScanResult", backref="target",
+        lazy=True, cascade="all, delete-orphan"
+    )
+
+
+class MonitorScanResult(db.Model):
+    __tablename__ = "monitor_scan_results"
+
+    id           = db.Column(db.Integer,  primary_key=True)
+    target_id    = db.Column(db.Integer,  db.ForeignKey("monitored_targets.id"), nullable=False)
+    risk_score   = db.Column(db.Float,    default=0.0)
+    verdict      = db.Column(db.String(30), default="UNKNOWN")
+    url_score    = db.Column(db.Float,    default=0.0)
+    rules_score  = db.Column(db.Float,    default=0.0)
+    ml_score     = db.Column(db.Float,    default=0.0)
+    alert_fired  = db.Column(db.Boolean,  default=False)
+    scan_summary = db.Column(db.Text,     default="")
+    scanned_at   = db.Column(db.DateTime, default=datetime.utcnow)
