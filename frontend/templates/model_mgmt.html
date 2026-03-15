@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}Model Management — PhishGuard{% endblock %}
+
+{% block content %}
+<!-- Data island -->
+<div id="page-data"
+     data-feedback-url="/models/feedback"
+     data-retrain-url="/models/retrain"
+     data-status-url="/models/retrain/status"
+     data-versions-url="/models/versions"
+     data-plan-url="/models/finetune-plan"
+     style="display:none"></div>
+
+<div class="page-header">
+  <h1 class="page-title">
+    <span class="title-icon">🧠</span>
+    Model Management
+  </h1>
+  <p class="page-subtitle">
+    Feedback labeling · RF retraining · Model versioning ·
+    Performance metrics · HuggingFace fine-tune pipeline
+  </p>
+</div>
+
+<!-- ── Feedback label form ────────────────────────────────────────────────── -->
+<div class="card mm-section">
+  <div class="card-header">
+    <span class="card-icon">🏷</span>
+    <span class="card-title">Submit Feedback Label</span>
+  </div>
+  <div class="card-body">
+    <p class="rs-hint">
+      Label a scan result to improve model accuracy.
+      These samples are used in the next retraining cycle.
+    </p>
+    <div class="mm-label-form">
+      <div class="rs-id-field" style="flex:2">
+        <label class="form-label">URL or Domain</label>
+        <input type="text" id="mmUrl" class="form-input"
+               placeholder="https://phishing-example.com">
+      </div>
+      <div class="rs-id-field">
+        <label class="form-label">Label Type</label>
+        <select id="mmLabelType" class="form-input mm-select">
+          <option value="">— Select —</option>
+          <option value="FALSE_POSITIVE">False Positive</option>
+          <option value="FALSE_NEGATIVE">False Negative</option>
+          <option value="CONFIRMED_PHISHING">Confirmed Phishing</option>
+          <option value="CONFIRMED_SAFE">Confirmed Safe</option>
+        </select>
+      </div>
+      <div class="rs-id-field">
+        <label class="form-label">Correct Label</label>
+        <select id="mmFeedbackLabel" class="form-input mm-select">
+          <option value="SAFE">SAFE</option>
+          <option value="MALICIOUS">MALICIOUS</option>
+        </select>
+      </div>
+      <div class="rs-id-field" style="flex:2">
+        <label class="form-label">Admin Note (optional)</label>
+        <input type="text" id="mmNote" class="form-input"
+               placeholder="e.g. Verified safe — internal tool URL">
+      </div>
+    </div>
+    <div class="ai-action-row" style="margin-top:14px">
+      <button class="btn btn-primary" id="mmSubmitBtn">
+        Submit Label
+      </button>
+      <div class="ai-error"   id="mmSubmitError"   style="display:none"></div>
+      <div class="mm-success" id="mmSubmitSuccess" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Retrain panel ──────────────────────────────────────────────────────── -->
+<div class="card mm-section">
+  <div class="card-header">
+    <span class="card-icon">🔄</span>
+    <span class="card-title">Retrain Random Forest Model</span>
+    <span class="mm-retrain-status" id="mmRetrainStatus"></span>
+  </div>
+  <div class="card-body">
+    <p class="rs-hint">
+      Triggers a background retraining job using all URL scan records
+      and accumulated feedback labels. The new model hot-swaps in
+      without server downtime.
+    </p>
+    <button class="btn btn-primary mm-retrain-btn" id="mmRetrainBtn">
+      ▶ Trigger Retrain
+    </button>
+
+    <!-- Live training log -->
+    <div class="mm-log-wrap" id="mmLogWrap" style="display:none">
+      <div class="mm-log-header">
+        <span>Training Log</span>
+        <span class="att-poll-indicator" id="mmLogPoll">● LIVE</span>
+      </div>
+      <pre class="mm-log" id="mmLog"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- ── Model version history ──────────────────────────────────────────────── -->
+<div class="card mm-section">
+  <div class="card-header">
+    <span class="card-icon">📦</span>
+    <span class="card-title">Model Version History</span>
+    <span class="att-count-badge" id="mmVersionCount">0</span>
+  </div>
+  <div class="card-body" style="padding:0">
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Version</th>
+            <th>Samples</th>
+            <th>Feedback</th>
+            <th>Accuracy</th>
+            <th>Precision</th>
+            <th>Recall</th>
+            <th>F1</th>
+            <th>Active</th>
+            <th>Created</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody id="mmVersionBody">
+          <tr>
+            <td colspan="10" class="att-empty-row">No versions yet.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ── Confusion matrix (shown when a version row is clicked) ─────────────── -->
+<div class="card mm-section" id="mmCmCard" style="display:none">
+  <div class="card-header">
+    <span class="card-icon">🔢</span>
+    <span class="card-title">
+      Confusion Matrix — v<span id="mmCmVersion"></span>
+    </span>
+    <button class="pm-close-btn" id="mmCmClose">✕ Close</button>
+  </div>
+  <div class="card-body mm-cm-body">
+    <div class="mm-cm-grid" id="mmCmGrid"></div>
+    <div class="mm-cm-legend">
+      <span class="mm-cm-label-row">Rows = Actual</span>
+      <span class="mm-cm-label-col">Columns = Predicted</span>
+    </div>
+    <div class="mm-cm-classes">
+      <span class="mm-cm-class mm-cm-neg">0 = SAFE</span>
+      <span class="mm-cm-class mm-cm-pos">1 = MALICIOUS</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Feedback queue ─────────────────────────────────────────────────────── -->
+<div class="card mm-section">
+  <div class="card-header">
+    <span class="card-icon">📋</span>
+    <span class="card-title">Feedback Label Queue</span>
+    <span class="att-poll-indicator">● LIVE</span>
+  </div>
+  <div class="card-body" style="padding:0">
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>URL</th>
+            <th>Label Type</th>
+            <th>Feedback Label</th>
+            <th>Used in Training</th>
+            <th>Version</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody id="mmFeedbackBody">
+          <tr>
+            <td colspan="7" class="att-empty-row">No feedback yet.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ── HuggingFace fine-tune plan ─────────────────────────────────────────── -->
+<div class="card mm-section">
+  <div class="card-header">
+    <span class="card-icon">🤗</span>
+    <span class="card-title">HuggingFace Fine-Tune Pipeline</span>
+    <button class="pm-close-btn" id="mmPlanToggle">Show Plan</button>
+  </div>
+  <div id="mmPlanBody" style="display:none">
+    <div class="card-body">
+      <div id="mmPlanSteps"></div>
+      <div class="mm-plan-note" id="mmPlanNote"></div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/model_mgmt.js"></script>
+{% endblock %}

@@ -43,6 +43,14 @@ from backend.modules.platform_monitor import (
     scan_target_full, extract_domain, get_due_targets, get_unified_feed
 )
 from backend.modules.risk_engine import aggregate_risk_scores
+from backend.modules.realtime_monitor import (
+    get_live_feed, get_live_stats, get_alerts_above_threshold
+)
+from backend.modules.model_manager import (
+    add_feedback_label, get_feedback_queue,
+    get_model_versions, get_training_state,
+    trigger_retrain, get_huggingface_finetune_plan,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -1859,3 +1867,247 @@ def _serialize_agg(r, full: bool = False) -> dict:
     if full:
         base["breakdown"] = _json.loads(r.breakdown or "{}")
     return base
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 11 — Live Monitor
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/monitor/feed",
+    summary="Live unified feed from all scan modules",
+    tags=["Live Monitor"]
+)
+async def monitor_feed(limit: int = 100):
+    """
+    Returns all recent scans across every module, newest first.
+    Polled by the dashboard every 5 seconds.
+    """
+    try:
+        feed = get_live_feed(limit=limit)
+        return {
+            "status": "success",
+            "feed":   feed,
+            "total":  len(feed),
+        }
+    except Exception as e:
+        logger.error(f"Monitor feed error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/monitor/stats",
+    summary="Scan statistics counters across all modules",
+    tags=["Live Monitor"]
+)
+async def monitor_stats():
+    """
+    Returns total, malicious, suspicious, safe counts
+    plus per-module breakdown. Polled every 5 seconds.
+    """
+    try:
+        stats = get_live_stats()
+        return {"status": "success", "stats": stats}
+    except Exception as e:
+        logger.error(f"Monitor stats error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/monitor/alerts",
+    summary="Recent scans above the alert threshold",
+    tags=["Live Monitor"]
+)
+async def monitor_alerts(threshold: float = 70.0, limit: int = 20):
+    """
+    Returns scans whose risk_score >= threshold.
+    Polled every 5 seconds by the dashboard alert banner.
+    """
+    try:
+        alerts = get_alerts_above_threshold(
+            threshold=threshold, limit=limit
+        )
+        return {
+            "status":    "success",
+            "alerts":    alerts,
+            "threshold": threshold,
+            "count":     len(alerts),
+        }
+    except Exception as e:
+        logger.error(f"Monitor alerts error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+    
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 12 — Continuous Learning System / Model Management
+# ─────────────────────────────────────────────────────────────────────────────
+
+class FeedbackLabelRequest(PydanticBase):
+    url:            str
+    label_type:     str
+    feedback_label: str
+    original_label: Optional[str] = ""
+    url_scan_id:    Optional[int] = None
+    admin_note:     Optional[str] = ""
+
+
+@router.post(
+    "/models/feedback",
+    summary="Submit a feedback label for a scan result",
+    tags=["Model Management"]
+)
+async def submit_feedback(req: FeedbackLabelRequest):
+    """
+    Admin labels a scan result as FALSE_POSITIVE, FALSE_NEGATIVE,
+    CONFIRMED_PHISHING, or CONFIRMED_SAFE.
+    Stored as a FeedbackSample for the next retraining cycle.
+    """
+    try:
+        result = add_feedback_label(
+            url            = req.url,
+            label_type     = req.label_type,
+            feedback_label = req.feedback_label,
+            original_label = req.original_label or "",
+            url_scan_id    = req.url_scan_id,
+            admin_note     = req.admin_note or "",
+        )
+        if "error" in result:
+            return JSONResponse(
+                status_code=400,
+                content=error_response(result["error"])
+            )
+        return {"status": "success", "sample": result}
+    except Exception as e:
+        logger.error(f"Feedback submit error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/models/feedback",
+    summary="List feedback label queue",
+    tags=["Model Management"]
+)
+async def list_feedback(limit: int = 50):
+    try:
+        queue = get_feedback_queue(limit=limit)
+        return {"status": "success", "queue": queue, "total": len(queue)}
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.post(
+    "/models/retrain",
+    summary="Trigger RF retraining in background thread",
+    tags=["Model Management"]
+)
+async def retrain_model(request: Request): # pyright: ignore[reportUndefinedVariable]
+    """
+    Starts the Random Forest retraining pipeline in a background thread.
+    Returns immediately. Poll /models/retrain/status for live log.
+    """
+    try:
+        from flask import current_app
+        # Get Flask app context to pass to background thread
+        import backend.app as _app_module
+        # We pass the FastAPI app's state — the Flask app context
+        # is retrieved inside the worker via the imported db
+        result = trigger_retrain(None)
+        return result
+    except Exception as e:
+        logger.error(f"Retrain trigger error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/models/retrain/status",
+    summary="Get live training log and status",
+    tags=["Model Management"]
+)
+async def retrain_status():
+    """Poll this endpoint every 2 seconds to get the live training log."""
+    try:
+        state = get_training_state()
+        return {"status": "success", "training": state}
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/models/versions",
+    summary="List all model versions with metrics",
+    tags=["Model Management"]
+)
+async def list_model_versions():
+    try:
+        versions = get_model_versions()
+        return {
+            "status":   "success",
+            "versions": versions,
+            "total":    len(versions),
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.get(
+    "/models/finetune-plan",
+    summary="HuggingFace fine-tune pipeline concept",
+    tags=["Model Management"]
+)
+async def hf_finetune_plan():
+    """
+    Returns the full HuggingFace fine-tuning pipeline design.
+    Production-ready code sketches for DistilBERT fine-tuning
+    using the Trainer API on the feedback dataset.
+    """
+    try:
+        plan = get_huggingface_finetune_plan()
+        return {"status": "success", "plan": plan}
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+# Fix retrain endpoint — remove Flask dependency, use db directly
+@router.post(
+    "/models/retrain",
+    summary="Trigger RF retraining in background thread",
+    tags=["Model Management"]
+)
+async def retrain_model():
+    try:
+        from backend.app import create_app
+        flask_app = create_app()
+        result    = trigger_retrain(flask_app.app_context())
+        return result
+    except Exception as e:
+        logger.error(f"Retrain trigger error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )

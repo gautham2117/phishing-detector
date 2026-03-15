@@ -1624,3 +1624,198 @@ select {
 
 /* ── History table ───────────────────────────────────────────────────────── */
 .rs-phases-cell         { font-size: 1rem; letter-spacing: 2px; }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   PHASE 11 — Live Monitor Styles
+   Append to bottom of main.css
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Stats counters row ──────────────────────────────────────────────────── */
+.lm-stats-row           {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 20px;
+}
+@media (max-width: 800px) {
+    .lm-stats-row       { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+    .lm-stats-row       { grid-template-columns: 1fr; }
+}
+
+.lm-stat-card           {
+    display: flex; flex-direction: column;
+    align-items: center; gap: 6px;
+    padding: 20px 16px; text-align: center;
+}
+.lm-stat-icon           { font-size: 1.6rem; }
+.lm-stat-val            {
+    font-size: 2rem; font-weight: 700; color: var(--text);
+    line-height: 1;
+}
+.lm-stat-label          { font-size: .78rem; color: var(--text-muted); }
+
+.lm-stat-malicious .lm-stat-val  { color: var(--red);   }
+.lm-stat-suspicious .lm-stat-val { color: var(--amber); }
+.lm-stat-safe .lm-stat-val       { color: var(--green); }
+.lm-stat-total .lm-stat-val      { color: var(--blue);  }
+
+/* ── Threshold control ───────────────────────────────────────────────────── */
+.lm-threshold-card      { margin-bottom: 20px; }
+.lm-threshold-desc      {
+    margin-left: 10px; font-size: .78rem; color: var(--text-muted);
+}
+.lm-threshold-body      {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+.lm-slider              {
+    flex: 1; min-width: 200px; accent-color: var(--blue);
+    cursor: pointer;
+}
+.lm-threshold-val       {
+    font-size: 1.3rem; font-weight: 700; color: var(--text); min-width: 28px;
+}
+.lm-threshold-unit      { color: var(--text-muted); font-size: .85rem; }
+.lm-poll-status         {
+    margin-left: auto; display: flex; align-items: center; gap: 10px;
+}
+.lm-last-update         { font-size: .76rem; color: var(--text-muted); }
+
+/* ── Feed table ──────────────────────────────────────────────────────────── */
+.lm-module-cell         { white-space: nowrap; font-size: .85rem; }
+.lm-ref-cell            {
+    max-width: 240px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+    font-size: .82rem; color: var(--text-muted);
+}
+
+/* New row flash animation */
+.lm-row-new             { animation: lm-flash .8s ease-out; }
+@keyframes lm-flash     {
+    0%   { background: rgba(56,139,253,.18); }
+    100% { background: transparent; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   PHASE 12 — Model Management Styles
+   Append to bottom of main.css
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Section spacing ─────────────────────────────────────────────────────── */
+.mm-section             { margin-bottom: 20px; }
+
+/* ── Feedback label form ─────────────────────────────────────────────────── */
+.mm-label-form          {
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end;
+}
+.mm-select              { width: 100%; }
+.mm-success             {
+    padding: 8px 14px; border-radius: var(--radius);
+    background: rgba(63,185,80,.12); color: var(--green);
+    font-size: .86rem;
+}
+
+/* ── Retrain panel ───────────────────────────────────────────────────────── */
+.mm-retrain-btn         { margin-bottom: 14px; }
+.mm-retrain-status      {
+    margin-left: auto; font-size: .78rem; font-weight: 600;
+    padding: 3px 10px; border-radius: 10px;
+    border: 1px solid var(--border);
+}
+.mm-status-running      {
+    color: var(--amber);
+    border-color: var(--amber);
+    background: rgba(210,153,34,.1);
+    animation: att-blink 1.5s step-end infinite;
+}
+.mm-status-done         {
+    color: var(--green);
+    border-color: var(--green);
+    background: rgba(63,185,80,.1);
+}
+.mm-status-error        {
+    color: var(--red);
+    border-color: var(--red);
+    background: rgba(248,81,73,.1);
+}
+
+/* ── Training log ────────────────────────────────────────────────────────── */
+.mm-log-wrap            {
+    margin-top: 14px; border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+}
+.mm-log-header          {
+    background: var(--bg3); padding: 8px 14px;
+    display: flex; justify-content: space-between;
+    font-size: .8rem; color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+}
+.mm-log                 {
+    background: #0d1117; color: #7ee787;
+    font-family: "Courier New", monospace; font-size: .78rem;
+    line-height: 1.6; padding: 12px 14px;
+    max-height: 300px; overflow-y: auto;
+    margin: 0; white-space: pre-wrap; word-break: break-all;
+}
+
+/* ── Confusion matrix ────────────────────────────────────────────────────── */
+.mm-cm-body             { display: flex; flex-direction: column; gap: 12px; }
+.mm-cm-grid             { display: inline-flex; flex-direction: column; gap: 4px; }
+.mm-cm-row              { display: flex; gap: 4px; }
+.mm-cm-cell             {
+    width: 110px; height: 70px; border-radius: var(--radius);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    font-size: .8rem;
+}
+.mm-cm-header           {
+    background: transparent; color: var(--text-muted);
+    font-weight: 600; font-size: .75rem;
+}
+.mm-cm-diag             { background: rgba(63,185,80,.15); border: 1px solid var(--green); }
+.mm-cm-offdiag          { background: rgba(248,81,73,.1);  border: 1px solid var(--red);   }
+.mm-cm-count            { font-size: 1.3rem; font-weight: 700; color: var(--text); }
+.mm-cm-pct              { font-size: .72rem; color: var(--text-muted); }
+.mm-cm-legend           {
+    display: flex; gap: 16px; font-size: .76rem; color: var(--text-muted);
+}
+.mm-cm-classes          { display: flex; gap: 16px; }
+.mm-cm-class            {
+    font-size: .76rem; padding: 2px 10px;
+    border-radius: 10px; border: 1px solid var(--border);
+}
+.mm-cm-neg              { color: var(--green); border-color: var(--green); }
+.mm-cm-pos              { color: var(--red);   border-color: var(--red);   }
+
+/* ── HuggingFace plan ────────────────────────────────────────────────────── */
+.mm-plan-step           {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px;
+    margin-bottom: 14px;
+}
+.mm-plan-step-header    {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+}
+.mm-plan-step-num       {
+    background: var(--blue); color: #fff; border-radius: 20px;
+    padding: 2px 10px; font-size: .75rem; font-weight: 700;
+}
+.mm-plan-step-name      { font-weight: 600; color: var(--text); }
+.mm-plan-desc           {
+    color: var(--text-muted); font-size: .85rem;
+    line-height: 1.6; margin: 0 0 10px 0;
+}
+.mm-plan-code           {
+    background: #0d1117; color: #79c0ff;
+    font-family: "Courier New", monospace; font-size: .78rem;
+    padding: 10px 12px; border-radius: var(--radius);
+    margin: 0; white-space: pre-wrap; overflow-x: auto;
+    border: 1px solid var(--border);
+}
+.mm-plan-note           {
+    margin-top: 16px; padding: 12px 14px;
+    background: rgba(56,139,253,.08); border-radius: var(--radius);
+    border: 1px solid rgba(56,139,253,.2);
+    font-size: .83rem; color: var(--text-muted); line-height: 1.6;
+}

@@ -199,15 +199,20 @@ class ModelVersion(db.Model):
     """
     __tablename__ = "model_versions"
 
-    id         = db.Column(db.Integer, primary_key=True)
-    version    = db.Column(db.String(20))          # e.g. "v1.0", "v1.1"
-    model_path = db.Column(db.String(255))         # path to .pkl file
-    accuracy   = db.Column(db.Float)
-    precision  = db.Column(db.Float)
-    recall     = db.Column(db.Float)
-    f1_score   = db.Column(db.Float)
-    is_active  = db.Column(db.Boolean, default=False)
-    trained_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id               = db.Column(db.Integer,    primary_key=True)
+    version_number   = db.Column(db.Integer,    default=1)
+    model_type       = db.Column(db.String(50), default="rf_url_classifier")
+    pkl_filename     = db.Column(db.String(255), default="")
+    training_samples = db.Column(db.Integer,    default=0)
+    feedback_samples = db.Column(db.Integer,    default=0)
+    accuracy         = db.Column(db.Float,      nullable=True)
+    precision        = db.Column(db.Float,      nullable=True)
+    recall           = db.Column(db.Float,      nullable=True)
+    f1_score         = db.Column(db.Float,      nullable=True)
+    confusion_matrix = db.Column(db.Text,       default="[]")
+    is_active        = db.Column(db.Boolean,    default=False)
+    training_log     = db.Column(db.Text,       default="")
+    created_at       = db.Column(db.DateTime,   default=datetime.utcnow)
 
 
 class FeedbackSample(db.Model):
@@ -217,14 +222,16 @@ class FeedbackSample(db.Model):
     """
     __tablename__ = "feedback_samples"
 
-    id          = db.Column(db.Integer, primary_key=True)
-    input_type  = db.Column(db.String(20))         # URL / Email
-    raw_input   = db.Column(db.Text)               # the URL or email body text
-    true_label  = db.Column(db.String(20))         # correct label from analyst
-    predicted   = db.Column(db.String(20))         # what the model said
-    labeled_by  = db.Column(db.String(100))        # analyst username
-    labeled_at  = db.Column(db.DateTime, default=datetime.utcnow)
-
+    id                 = db.Column(db.Integer,    primary_key=True)
+    url_scan_id        = db.Column(db.Integer,    nullable=True)
+    url                = db.Column(db.String(2048), default="")
+    original_label     = db.Column(db.String(30),  default="")
+    feedback_label     = db.Column(db.String(30),  default="")
+    label_type         = db.Column(db.String(30),  default="")
+    admin_note         = db.Column(db.Text,         default="")
+    used_in_training   = db.Column(db.Boolean,      default=False)
+    created_at         = db.Column(db.DateTime,     default=datetime.utcnow)
+    trained_in_version = db.Column(db.Integer,      nullable=True)
 class AIDetectionScan(db.Model):
     __tablename__ = "ai_detection_scans"
 
@@ -325,3 +332,5 @@ class AggregatedRiskScore(db.Model):
     phases_used      = db.Column(db.Text,    default="[]")  # JSON list
     breakdown        = db.Column(db.Text,    default="{}")  # JSON dict
     created_at       = db.Column(db.DateTime, default=datetime.utcnow)
+
+    
