@@ -931,3 +931,289 @@ select {
 
 .rule-name { font-size: 13px; font-weight: 500; }
 .rule-desc { font-size: 12px; color: var(--text-muted); margin: 5px 0 0; line-height: 1.6; }
+
+/* ── ML Classifier additions ── */
+
+.weight-sliders {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.weight-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.weight-row label {
+  width: 180px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.weight-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--blue);
+}
+
+.weight-row span {
+  width: 36px;
+  text-align: right;
+  font-family: monospace;
+  font-size: 13px;
+}
+
+/* Classifier comparison grid */
+.classifier-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 800px) {
+  .classifier-grid { grid-template-columns: 1fr; }
+}
+
+.classifier-card h2  { font-size: 15px; margin-bottom: 4px; }
+
+.classifier-model-name {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+.classifier-verdict {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.conf-bar-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+/* Availability status */
+.model-available   { color: var(--green); font-size: 12px; }
+.model-unavailable { color: var(--amber); font-size: 12px; }
+
+/* Confidence pill */
+.confidence-pill {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+/* RF feature list */
+.feature-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.feature-name {
+  width: 160px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-family: monospace;
+}
+
+.feature-bar-track {
+  flex: 1;
+  height: 6px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.feature-bar-fill {
+  height: 100%;
+  background: var(--blue);
+  border-radius: 3px;
+  transition: width 0.4s;
+}
+
+.feature-val {
+  width: 36px;
+  text-align: right;
+  font-family: monospace;
+  color: var(--text-muted);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   PHASE 6 — Attachment Analysis Styles
+   Append to bottom of main.css — do NOT replace existing rules
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Upload card ─────────────────────────────────────────────────────────── */
+.att-upload-card            { margin-bottom: 20px; }
+.att-drop-zone              {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 40px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .2s, background .2s;
+    background: transparent;
+}
+.att-drop-zone:hover,
+.att-drop-active            { border-color: var(--blue); background: rgba(56,139,253,.06); }
+.att-drop-icon              { font-size: 2.4rem; margin-bottom: 10px; }
+.att-drop-text              { color: var(--text); margin-bottom: 6px; }
+.att-browse-label           {
+    color: var(--blue); cursor: pointer; text-decoration: underline;
+}
+.att-drop-types             { color: var(--text-muted); font-size: .8rem; }
+.att-file-input             { display: none; }
+
+.att-form-row               { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.att-email-id               { max-width: 200px; }
+.att-selected-info          {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg3); border-radius: var(--radius);
+    padding: 8px 14px; font-size: .9rem; margin-bottom: 14px;
+}
+.att-selected-name          { color: var(--blue); font-weight: 600; }
+.att-selected-size          { color: var(--text-muted); }
+.att-scan-btn               { margin-top: 4px; }
+.att-error                  {
+    margin-top: 10px; padding: 10px 14px; border-radius: var(--radius);
+    background: rgba(248,81,73,.12); color: var(--red);
+    font-size: .88rem;
+}
+
+/* ── Verdict + entropy row ───────────────────────────────────────────────── */
+.att-verdict-row            {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+@media (max-width: 720px) {
+    .att-verdict-row        { grid-template-columns: 1fr; }
+}
+
+.att-verdict-body           { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 24px 16px; }
+.att-verdict-badge          {
+    font-size: 1.6rem; font-weight: 700; letter-spacing: .05em;
+    padding: 8px 28px; border-radius: 30px;
+}
+.att-verdict-clean          { background: rgba(63,185,80,.15);  color: var(--green); }
+.att-verdict-suspicious     { background: rgba(210,153,34,.15); color: var(--amber); }
+.att-verdict-malicious      { background: rgba(248,81,73,.15);  color: var(--red);   }
+.att-verdict-filename       { font-weight: 600; font-size: .95rem; color: var(--text); word-break: break-all; }
+.att-verdict-type,
+.att-verdict-size           { font-size: .83rem; color: var(--text-muted); }
+.att-verdict-action         { font-size: .88rem; font-weight: 600; color: var(--text); }
+
+/* ── Entropy gauge ───────────────────────────────────────────────────────── */
+.att-entropy-body           { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.att-entropy-value          { font-size: 2rem; font-weight: 700; color: var(--text); }
+.att-entropy-scale          { width: 100%; }
+.att-entropy-bar-bg         {
+    height: 14px; background: var(--bg3); border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--border);
+}
+.att-entropy-bar-fill       {
+    height: 100%; border-radius: 8px; transition: width .5s ease;
+}
+.att-entropy-green          { background: var(--green); }
+.att-entropy-amber          { background: var(--amber); }
+.att-entropy-red            { background: var(--red); }
+.att-entropy-labels         {
+    display: flex; justify-content: space-between;
+    font-size: .72rem; color: var(--text-muted); margin-top: 4px;
+}
+.att-entropy-note           { font-size: .82rem; text-align: center; }
+
+/* ── Hashes ──────────────────────────────────────────────────────────────── */
+.att-hash-row               {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.att-hash-row:last-child    { border-bottom: none; }
+.att-hash-label             { font-size: .75rem; font-weight: 700; color: var(--text-muted); min-width: 56px; }
+.att-hash-value             {
+    font-family: monospace; font-size: .8rem; color: var(--blue);
+    word-break: break-all; flex: 1;
+}
+.att-copy-btn               {
+    background: var(--bg3); border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text-muted); font-size: .74rem; padding: 3px 10px;
+    cursor: pointer; white-space: nowrap; transition: background .15s;
+}
+.att-copy-btn:hover         { background: var(--border); color: var(--text); }
+.att-known-bad-badge        {
+    margin-left: auto; background: rgba(248,81,73,.15);
+    color: var(--red); font-size: .75rem; font-weight: 700;
+    padding: 3px 10px; border-radius: 20px; border: 1px solid var(--red);
+}
+
+/* ── Tags (YARA / strings) ───────────────────────────────────────────────── */
+.att-tag-list               { display: flex; flex-wrap: wrap; gap: 8px; min-height: 32px; }
+.att-tag                    {
+    padding: 4px 12px; border-radius: 20px;
+    font-size: .78rem; font-weight: 600; white-space: nowrap;
+}
+.att-tag-danger             { background: rgba(248,81,73,.15);  color: var(--red);   border: 1px solid var(--red); }
+.att-tag-warn               { background: rgba(210,153,34,.15); color: var(--amber); border: 1px solid var(--amber); }
+.att-count-badge            {
+    margin-left: 8px; background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1px 9px; font-size: .78rem; color: var(--text-muted);
+}
+.att-empty-note             { color: var(--text-muted); font-size: .85rem; font-style: italic; }
+
+/* ── Deep findings ───────────────────────────────────────────────────────── */
+.att-findings-list          { display: flex; flex-direction: column; gap: 8px; }
+.att-finding-row            {
+    padding: 8px 14px; border-radius: var(--radius);
+    font-size: .85rem; border-left: 3px solid transparent;
+}
+.att-finding-danger         { background: rgba(248,81,73,.08);  border-color: var(--red);   color: var(--red);   }
+.att-finding-warn           { background: rgba(210,153,34,.08); border-color: var(--amber); color: var(--amber); }
+.att-finding-info           { background: rgba(56,139,253,.08); border-color: var(--blue);  color: var(--blue);  }
+
+/* ── PDF URLs ────────────────────────────────────────────────────────────── */
+.att-url-list               { list-style: none; padding: 0; margin: 0; }
+.att-url-item               {
+    font-family: monospace; font-size: .8rem; color: var(--blue);
+    padding: 5px 0; border-bottom: 1px solid var(--bg3);
+    word-break: break-all;
+}
+.att-url-item:last-child    { border-bottom: none; }
+
+/* ── Explanation ─────────────────────────────────────────────────────────── */
+.att-explanation            { color: var(--text); font-size: .92rem; line-height: 1.6; margin: 0; }
+.att-email-link             { margin-top: 12px; font-size: .85rem; color: var(--text-muted); }
+.att-link                   { color: var(--blue); }
+
+/* ── History table extras ────────────────────────────────────────────────── */
+.att-fname                  { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-type                   { color: var(--text-muted); font-size: .8rem; }
+.att-ts                     { font-size: .78rem; color: var(--text-muted); white-space: nowrap; }
+.att-empty-row              { text-align: center; color: var(--text-muted); padding: 24px !important; }
+.att-cell-red               { color: var(--red);   font-weight: 700; }
+.att-cell-amber             { color: var(--amber); font-weight: 600; }
+
+/* ── Live poll indicator ─────────────────────────────────────────────────── */
+.att-poll-indicator         {
+    margin-left: auto; font-size: .72rem; color: var(--green);
+    animation: att-blink 2s step-end infinite;
+}
+@keyframes att-blink        { 50% { opacity: .2; } }
+
+/* ── Results section spacing ─────────────────────────────────────────────── */
+.att-results .card          { margin-bottom: 16px; }
+.att-results                { margin-top: 24px; }

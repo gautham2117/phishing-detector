@@ -1,0 +1,84 @@
+{
+  "version": "v1.0",
+  "model_type": "RandomForestClassifier",
+  "n_estimators": 200,
+  "n_features": 24,
+  "feature_names": [
+    "url_length",
+    "domain_length",
+    "path_length",
+    "num_dots",
+    "num_hyphens",
+    "num_underscores",
+    "num_slashes",
+    "num_at_symbols",
+    "num_question_marks",
+    "num_equals",
+    "num_ampersands",
+    "num_digits",
+    "digit_ratio",
+    "special_char_ratio",
+    "subdomain_depth",
+    "has_ip_address",
+    "has_https",
+    "has_http",
+    "is_shortener",
+    "has_suspicious_tld",
+    "has_at_in_domain",
+    "has_double_slash",
+    "domain_entropy",
+    "path_entropy"
+  ],
+  "train_samples": 480,
+  "test_samples": 120,
+  "accuracy": 1.0,
+  "precision": 1.0,
+  "recall": 1.0,
+  "f1_score": 1.0,
+  "cv_f1_mean": 1.0,
+  "cv_f1_std": 0.0,
+  "top_features": [
+    {
+      "name": "has_https",
+      "importance": 0.2511
+    },
+    {
+      "name": "has_http",
+      "importance": 0.182
+    },
+    {
+      "name": "has_suspicious_tld",
+      "importance": 0.1447
+    },
+    {
+      "name": "domain_length",
+      "importance": 0.0949
+    },
+    {
+      "name": "num_hyphens",
+      "importance": 0.0691
+    },
+    {
+      "name": "url_length",
+      "importance": 0.0624
+    },
+    {
+      "name": "domain_entropy",
+      "importance": 0.0567
+    },
+    {
+      "name": "subdomain_depth",
+      "importance": 0.0339
+    },
+    {
+      "name": "num_dots",
+      "importance": 0.0303
+    },
+    {
+      "name": "digit_ratio",
+      "importance": 0.0205
+    }
+  ],
+  "trained_at": "2026-03-15T09:55:32.801085Z",
+  "model_path": "D:\\PROJECT-1\\phishing-detector\\phishing-detector\\backend\\ml\\models\\rf_url_classifier_v1.pkl"
+}

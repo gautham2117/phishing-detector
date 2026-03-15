@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}Attachment Analysis — PhishGuard{% endblock %}
+
+{% block content %}
+<!-- Hidden data island — JS reads from here, never from Jinja inside <script> -->
+<div id="page-data"
+     data-scan-url="/attachments/scan"
+     data-history-url="/attachments/history"
+     data-detail-url="/attachments/detail"
+     style="display:none"></div>
+
+<div class="page-header">
+  <h1 class="page-title">
+    <span class="title-icon">📎</span>
+    File &amp; Attachment Analysis
+  </h1>
+  <p class="page-subtitle">
+    Hash verification · YARA rules · Entropy analysis · Macro detection · HTML phishing
+  </p>
+</div>
+
+<!-- ── Upload Zone ─────────────────────────────────────────────────────────── -->
+<div class="card att-upload-card" id="uploadCard">
+  <div class="card-header">
+    <span class="card-icon">⬆</span>
+    <span class="card-title">Upload File for Analysis</span>
+  </div>
+  <div class="card-body">
+
+    <div class="att-drop-zone" id="dropZone">
+      <div class="att-drop-icon">📂</div>
+      <div class="att-drop-text">
+        Drag &amp; drop a file here, or <label class="att-browse-label" for="fileInput">browse</label>
+      </div>
+      <div class="att-drop-types">
+        PDF · DOCX · ZIP · EXE · HTML · JS · Images (max 50 MB)
+      </div>
+      <input type="file" id="fileInput" class="att-file-input"
+             accept=".pdf,.doc,.docx,.xls,.xlsx,.zip,.exe,.html,.htm,.js,.png,.jpg,.jpeg,.gif">
+    </div>
+
+    <div class="att-form-row" style="margin-top:12px">
+      <label class="form-label" for="emailScanId">
+        Link to Email Scan ID (optional)
+      </label>
+      <input type="number" id="emailScanId" class="form-input att-email-id"
+             placeholder="e.g. 42" min="1">
+    </div>
+
+    <div class="att-selected-info" id="selectedInfo" style="display:none">
+      <span class="att-selected-name" id="selectedName"></span>
+      <span class="att-selected-size" id="selectedSize"></span>
+    </div>
+
+    <button class="btn btn-primary att-scan-btn" id="scanBtn" disabled>
+      <span class="btn-text">Scan File</span>
+      <span class="btn-spinner" id="btnSpinner" style="display:none">⏳</span>
+    </button>
+
+    <div class="att-error" id="uploadError" style="display:none"></div>
+  </div>
+</div>
+
+<!-- ── Results Panel (hidden until scan completes) ────────────────────────── -->
+<div class="att-results" id="resultsPanel" style="display:none">
+
+  <!-- Verdict + meta -->
+  <div class="att-verdict-row">
+    <div class="card att-verdict-card">
+      <div class="card-body att-verdict-body">
+        <div class="att-verdict-badge" id="verdictBadge">—</div>
+        <div class="att-verdict-filename" id="verdictFilename"></div>
+        <div class="att-verdict-type" id="verdictType"></div>
+        <div class="att-verdict-size" id="verdictSize"></div>
+        <div class="att-verdict-action" id="verdictAction"></div>
+      </div>
+    </div>
+
+    <!-- Entropy gauge -->
+    <div class="card att-entropy-card">
+      <div class="card-header">
+        <span class="card-icon">🌡</span>
+        <span class="card-title">Shannon Entropy</span>
+      </div>
+      <div class="card-body att-entropy-body">
+        <div class="att-entropy-value" id="entropyValue">0.00</div>
+        <div class="att-entropy-scale">
+          <div class="att-entropy-bar-bg">
+            <div class="att-entropy-bar-fill" id="entropyFill" style="width:0%"></div>
+          </div>
+          <div class="att-entropy-labels">
+            <span>0</span>
+            <span>4</span>
+            <span>7.2</span>
+            <span>8</span>
+          </div>
+        </div>
+        <div class="att-entropy-note" id="entropyNote"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hashes -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-icon">#</span>
+      <span class="card-title">File Hashes</span>
+      <span class="att-known-bad-badge" id="knownBadBadge" style="display:none">
+        ⚠ KNOWN MALWARE HASH
+      </span>
+    </div>
+    <div class="card-body">
+      <div class="att-hash-row">
+        <span class="att-hash-label">MD5</span>
+        <span class="att-hash-value" id="hashMd5">—</span>
+        <button class="att-copy-btn" data-target="hashMd5">Copy</button>
+      </div>
+      <div class="att-hash-row">
+        <span class="att-hash-label">SHA-256</span>
+        <span class="att-hash-value" id="hashSha256">—</span>
+        <button class="att-copy-btn" data-target="hashSha256">Copy</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- YARA matches -->
+  <div class="card" id="yaraCard">
+    <div class="card-header">
+      <span class="card-icon">🎯</span>
+      <span class="card-title">YARA Rule Matches</span>
+      <span class="att-count-badge" id="yaraCount">0</span>
+    </div>
+    <div class="card-body">
+      <div class="att-tag-list" id="yaraList">
+        <span class="att-empty-note">No YARA rules matched.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Suspicious strings -->
+  <div class="card" id="stringsCard">
+    <div class="card-header">
+      <span class="card-icon">🔍</span>
+      <span class="card-title">Suspicious Strings Detected</span>
+      <span class="att-count-badge" id="stringsCount">0</span>
+    </div>
+    <div class="card-body">
+      <div class="att-tag-list" id="stringsList">
+        <span class="att-empty-note">No suspicious strings found.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Format-specific findings (HTML/PDF/Macro/ZIP) -->
+  <div class="card" id="deepCard" style="display:none">
+    <div class="card-header">
+      <span class="card-icon">🔬</span>
+      <span class="card-title">Deep Analysis Findings</span>
+    </div>
+    <div class="card-body">
+      <div class="att-findings-list" id="deepFindings"></div>
+    </div>
+  </div>
+
+  <!-- PDF embedded URLs -->
+  <div class="card" id="pdfUrlsCard" style="display:none">
+    <div class="card-header">
+      <span class="card-icon">🔗</span>
+      <span class="card-title">URLs Extracted from PDF</span>
+    </div>
+    <div class="card-body">
+      <ul class="att-url-list" id="pdfUrlList"></ul>
+    </div>
+  </div>
+
+  <!-- Explanation -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-icon">💬</span>
+      <span class="card-title">Analysis Explanation</span>
+    </div>
+    <div class="card-body">
+      <p class="att-explanation" id="explanationText"></p>
+      <div class="att-email-link" id="emailLinkRow" style="display:none">
+        🔗 Linked to Email Scan ID: <a id="emailScanLink" href="#" class="att-link">—</a>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /resultsPanel -->
+
+<!-- ── Recent Scans History ────────────────────────────────────────────────── -->
+<div class="card" style="margin-top:24px">
+  <div class="card-header">
+    <span class="card-icon">🕐</span>
+    <span class="card-title">Recent Attachment Scans</span>
+    <span class="att-poll-indicator" id="pollIndicator">● LIVE</span>
+  </div>
+  <div class="card-body" style="padding:0">
+    <div class="table-wrapper">
+      <table class="data-table" id="historyTable">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Filename</th>
+            <th>Type</th>
+            <th>Size</th>
+            <th>Entropy</th>
+            <th>YARA Hits</th>
+            <th>Verdict</th>
+            <th>Scanned</th>
+          </tr>
+        </thead>
+        <tbody id="historyBody">
+          <tr>
+            <td colspan="8" class="att-empty-row">No scans yet.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/attachment.js"></script>
+{% endblock %}

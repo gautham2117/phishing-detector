@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}ML Classifier{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>ML Classifier</h1>
+  <span class="last-updated">
+    Last updated: <span id="update-time">—</span>
+  </span>
+</div>
+
+<!-- ── Scan form ── -->
+<div class="card">
+  <h2>Classify a URL</h2>
+  <div class="url-input-row">
+    <input type="text" id="url-input"
+           placeholder="https://example.com/path"
+           onkeydown="if(event.key==='Enter') runClassifier()">
+    <button class="btn-primary" onclick="runClassifier()">Classify</button>
+  </div>
+
+  <!-- Weight sliders -->
+  <div class="weight-sliders">
+    <div class="weight-row">
+      <label>Random Forest weight</label>
+      <input type="range" id="rf-weight" min="0" max="100" value="45"
+             oninput="syncWeights('rf')">
+      <span id="rf-weight-val">0.45</span>
+    </div>
+    <div class="weight-row">
+      <label>BERT weight</label>
+      <input type="range" id="bert-weight" min="0" max="100" value="55"
+             oninput="syncWeights('bert')">
+      <span id="bert-weight-val">0.55</span>
+    </div>
+  </div>
+  <p class="hint">
+    Soft-voting ensemble: final score =
+    (RF weight × RF score) + (BERT weight × BERT score).
+    Weights must sum to 1.0.
+  </p>
+</div>
+
+<!-- ── Spinner ── -->
+<div class="spinner-overlay" id="spinner" style="display:none">
+  <div class="spinner"></div>
+  <p>Running RF + BERT ensemble...</p>
+</div>
+
+<!-- ── Result card ── -->
+<div id="result-card" style="display:none">
+
+  <!-- Ensemble verdict -->
+  <div class="card">
+    <div class="result-header">
+      <div style="flex:1">
+        <div class="url-display" id="res-url">—</div>
+      </div>
+      <div class="risk-badge" id="ensemble-badge">—</div>
+    </div>
+
+    <!-- Ensemble score bar -->
+    <div class="score-bar-container">
+      <div class="score-bar-track">
+        <div class="score-bar-fill" id="ensemble-bar" style="width:0%"></div>
+      </div>
+      <span class="score-number" id="ensemble-score-num">0</span>
+      <span class="score-label">/ 100</span>
+    </div>
+
+    <div style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;">
+      <div class="action-pill" id="action-pill">—</div>
+      <span id="confidence-pill" class="confidence-pill">—</span>
+    </div>
+  </div>
+
+  <!-- ── Side-by-side classifier comparison ── -->
+  <div class="classifier-grid">
+
+    <!-- Random Forest card -->
+    <div class="card classifier-card" id="rf-card">
+      <h2>Random Forest</h2>
+      <div class="classifier-model-name">
+        scikit-learn · 200 trees · 24 URL features
+      </div>
+
+      <div class="classifier-verdict" id="rf-verdict">—</div>
+
+      <div class="conf-bar-label">Phishing probability</div>
+      <div class="confidence-bar-track">
+        <div class="confidence-bar-fill" id="rf-bar" style="width:0%"></div>
+      </div>
+      <span class="confidence-label" id="rf-score-label">0%</span>
+
+      <!-- Feature contribution chart -->
+      <h3 style="margin-top:16px;">Top features (from last scan)</h3>
+      <div id="rf-features">
+        <p class="empty-state">Run a scan to see feature contributions.</p>
+      </div>
+    </div>
+
+    <!-- BERT card -->
+    <div class="card classifier-card" id="bert-card">
+      <h2>BERT classifier</h2>
+      <div class="classifier-model-name">
+        ealvaradob/bert-finetuned-phishing
+      </div>
+
+      <div class="classifier-verdict" id="bert-verdict">—</div>
+
+      <div class="conf-bar-label">Phishing probability</div>
+      <div class="confidence-bar-track">
+        <div class="confidence-bar-fill" id="bert-bar" style="width:0%"></div>
+      </div>
+      <span class="confidence-label" id="bert-score-label">0%</span>
+
+      <div id="bert-status" style="margin-top:16px;"></div>
+    </div>
+
+  </div>
+
+  <!-- ── Ensemble breakdown chart ── -->
+  <div class="card">
+    <h2>Ensemble score breakdown</h2>
+    <canvas id="ensemble-chart" height="80"></canvas>
+  </div>
+
+  <!-- ── Explanation ── -->
+  <div class="card">
+    <h2>Explanation</h2>
+    <p class="explanation" id="explanation-text">—</p>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/ml_classifier.js') }}"></script>
+{% endblock %}

@@ -66,7 +66,9 @@ def _register_blueprints(app: Flask) -> None:
     from backend.app.routes.email_scan   import email_scan_bp
     from backend.app.routes.url_intel    import url_intel_bp
     from backend.app.routes.network_scan import network_scan_bp
-
+    from backend.app.routes.attachment import bp as attachment_bp
+    
+    app.register_blueprint(attachment_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(email_scan_bp,   url_prefix="/email")
     app.register_blueprint(url_intel_bp,    url_prefix="/url")
