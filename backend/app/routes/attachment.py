@@ -10,7 +10,7 @@ from backend.app.models import AttachmentScan
 from backend.app.database import db
 
 logger        = logging.getLogger(__name__)
-attachment_bp = Blueprint("attachment_bp", __name__)
+attachment_bp = Blueprint("attachment_bp", __name__, url_prefix="/attachments")
 
 
 def _api():

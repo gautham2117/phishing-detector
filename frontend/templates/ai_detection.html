@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block title %}AI Content Detection — PhishGuard{% endblock %}
+
+{% block content %}
+<!-- Data island — JS reads from here, never from Jinja inside script tags -->
+<div id="page-data"
+     data-text-url="/ai-detection/scan/text"
+     data-url-url="/ai-detection/scan/url"
+     data-file-url="/ai-detection/scan/file"
+     data-history-url="/ai-detection/history"
+     style="display:none"></div>
+
+<div class="page-header">
+  <h1 class="page-title">
+    <span class="title-icon">🤖</span>
+    AI-Generated Content Detection
+  </h1>
+  <p class="page-subtitle">
+    Detects AI-written phishing content using RoBERTa ·
+    Per-sentence heatmap · Supports text, URL, and file input
+  </p>
+</div>
+
+<!-- ── Input tabs ──────────────────────────────────────────────────────────── -->
+<div class="card ai-input-card">
+  <div class="card-header">
+    <span class="card-icon">📥</span>
+    <span class="card-title">Input</span>
+  </div>
+  <div class="card-body">
+
+    <!-- Tab switcher -->
+    <div class="ai-tab-bar">
+      <button class="ai-tab active" data-tab="text">✏ Paste Text</button>
+      <button class="ai-tab"       data-tab="url" >🔗 From URL</button>
+      <button class="ai-tab"       data-tab="file">📎 Upload File</button>
+    </div>
+
+    <!-- Text tab -->
+    <div class="ai-tab-panel active" id="panel-text">
+      <textarea id="textInput" class="ai-textarea"
+                placeholder="Paste email body, article, or any text to analyse..."></textarea>
+      <div class="ai-char-count">
+        <span id="charCount">0</span> / 8000 characters
+      </div>
+    </div>
+
+    <!-- URL tab -->
+    <div class="ai-tab-panel" id="panel-url">
+      <input type="url" id="urlInput" class="form-input ai-url-input"
+             placeholder="https://example.com/suspicious-page">
+      <p class="ai-hint">
+        PhishGuard will fetch the page and extract readable text automatically.
+      </p>
+    </div>
+
+    <!-- File tab -->
+    <div class="ai-tab-panel" id="panel-file">
+      <div class="ai-drop-zone" id="aiDropZone">
+        <div class="ai-drop-icon">📂</div>
+        <div class="ai-drop-text">
+          Drag &amp; drop or
+          <label class="ai-browse-label" for="aiFileInput">browse</label>
+        </div>
+        <div class="ai-drop-hint">TXT · HTML · EML · PDF · DOCX (max 10 MB)</div>
+        <input type="file" id="aiFileInput" class="att-file-input"
+               accept=".txt,.html,.htm,.eml,.pdf,.docx,.md,.csv,.log">
+      </div>
+      <div class="ai-selected-info" id="aiSelectedInfo" style="display:none">
+        <span id="aiSelectedName"></span>
+        <span id="aiSelectedSize" class="ai-size-label"></span>
+      </div>
+    </div>
+
+    <!-- Scan button + error -->
+    <div class="ai-action-row">
+      <button class="btn btn-primary ai-scan-btn" id="aiScanBtn">
+        <span class="ai-btn-text">Analyse</span>
+        <span class="ai-btn-spinner" id="aiSpinner" style="display:none">⏳</span>
+      </button>
+      <div class="ai-error" id="aiError" style="display:none"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Results ─────────────────────────────────────────────────────────────── -->
+<div id="aiResultsPanel" style="display:none">
+
+  <!-- Verdict + meter -->
+  <div class="ai-verdict-row">
+
+    <div class="card ai-verdict-card">
+      <div class="card-body ai-verdict-body">
+        <div class="ai-verdict-badge" id="aiVerdictBadge">—</div>
+        <div class="ai-verdict-prob"  id="aiVerdictProb"></div>
+        <div class="ai-verdict-meta"  id="aiVerdictMeta"></div>
+        <div class="ai-verdict-action" id="aiVerdictAction"></div>
+      </div>
+    </div>
+
+    <div class="card ai-meter-card">
+      <div class="card-header">
+        <span class="card-icon">📊</span>
+        <span class="card-title">AI Probability Meter</span>
+      </div>
+      <div class="card-body ai-meter-body">
+        <div class="ai-meter-value" id="aiMeterValue">0%</div>
+        <div class="ai-meter-track">
+          <div class="ai-meter-fill" id="aiMeterFill" style="width:0%"></div>
+          <div class="ai-meter-marker" style="left:45%"
+               title="Mixed threshold (45%)"></div>
+          <div class="ai-meter-marker ai-marker-high" style="left:75%"
+               title="AI threshold (75%)"></div>
+        </div>
+        <div class="ai-meter-legend">
+          <span class="ai-legend-human">Human</span>
+          <span class="ai-legend-mixed">Mixed</span>
+          <span class="ai-legend-ai">AI-Generated</span>
+        </div>
+        <div class="ai-meter-stats">
+          <div class="ai-stat">
+            <span class="ai-stat-label">Characters</span>
+            <span class="ai-stat-val" id="statChars">—</span>
+          </div>
+          <div class="ai-stat">
+            <span class="ai-stat-label">Sentences</span>
+            <span class="ai-stat-val" id="statSentences">—</span>
+          </div>
+          <div class="ai-stat">
+            <span class="ai-stat-label">Input type</span>
+            <span class="ai-stat-val" id="statType">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Explanation -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-icon">💬</span>
+      <span class="card-title">Analysis Explanation</span>
+    </div>
+    <div class="card-body">
+      <p class="ai-explanation" id="aiExplanation"></p>
+    </div>
+  </div>
+
+  <!-- Sentence heatmap -->
+  <div class="card" id="aiHeatmapCard">
+    <div class="card-header">
+      <span class="card-icon">🌡</span>
+      <span class="card-title">Sentence-Level Heatmap</span>
+      <span class="ai-heatmap-legend">
+        <span class="ai-dot ai-dot-human"></span> Human
+        <span class="ai-dot ai-dot-mixed"></span> Mixed
+        <span class="ai-dot ai-dot-ai"></span> AI
+      </span>
+    </div>
+    <div class="card-body">
+      <div class="ai-heatmap" id="aiHeatmap"></div>
+    </div>
+  </div>
+
+</div><!-- /aiResultsPanel -->
+
+<!-- ── History table ───────────────────────────────────────────────────────── -->
+<div class="card" style="margin-top:24px">
+  <div class="card-header">
+    <span class="card-icon">🕐</span>
+    <span class="card-title">Recent Detections</span>
+    <span class="att-poll-indicator" id="aiPollIndicator">● LIVE</span>
+  </div>
+  <div class="card-body" style="padding:0">
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Type</th>
+            <th>Source / Preview</th>
+            <th>Sentences</th>
+            <th>AI Probability</th>
+            <th>Verdict</th>
+            <th>Scanned</th>
+          </tr>
+        </thead>
+        <tbody id="aiHistoryBody">
+          <tr>
+            <td colspan="7" class="att-empty-row">No detections yet.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/ai_detection.js"></script>
+{% endblock %}

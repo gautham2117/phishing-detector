@@ -1239,3 +1239,232 @@ select {
   color: var(--amber);
   font-size: 12px;
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   PHASE 7 — Image Analysis Styles
+   Append to bottom of main.css
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Upload zone ─────────────────────────────────────────────────────────── */
+.img-upload-card        { margin-bottom: 20px; }
+.img-drop-zone          {
+    border: 2px dashed var(--border); border-radius: var(--radius);
+    padding: 36px 20px; text-align: center; cursor: pointer;
+    transition: border-color .2s, background .2s;
+}
+.img-drop-zone:hover,
+.img-drop-zone.att-drop-active {
+    border-color: var(--blue); background: rgba(56,139,253,.06);
+}
+.img-drop-icon          { font-size: 2.4rem; margin-bottom: 8px; }
+.img-drop-text          { color: var(--text); margin-bottom: 4px; }
+.img-drop-hint          { color: var(--text-muted); font-size: .78rem; }
+
+/* ── Image preview ───────────────────────────────────────────────────────── */
+.img-preview-wrap       {
+    margin-top: 16px; text-align: center;
+    background: var(--bg3); border-radius: var(--radius);
+    padding: 12px; border: 1px solid var(--border);
+}
+.img-preview            {
+    max-width: 100%; max-height: 340px;
+    border-radius: 6px; object-fit: contain;
+    border: 1px solid var(--border);
+}
+.img-preview-meta       {
+    margin-top: 8px; font-size: .8rem;
+    color: var(--text-muted);
+}
+
+/* ── Classifier panel ────────────────────────────────────────────────────── */
+.img-clf-body           { display: flex; flex-direction: column; gap: 12px; }
+.img-clf-label          {
+    font-size: 1.4rem; font-weight: 700; color: var(--text);
+    text-align: center;
+}
+.img-clf-score-wrap     { display: flex; align-items: center; gap: 12px; }
+.img-clf-bar            { transition: width .5s ease; }
+.img-clf-score-text     {
+    font-size: .86rem; font-weight: 600; color: var(--text-muted);
+    white-space: nowrap; min-width: 36px;
+}
+.img-clf-note           { font-size: .83rem; }
+.img-meta-row           {
+    display: flex; gap: 20px; padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+
+/* ── Brands note ─────────────────────────────────────────────────────────── */
+.img-brands-note        {
+    margin-top: 10px; font-size: .82rem;
+    color: var(--amber); font-style: italic;
+}
+
+/* ── OCR text block ──────────────────────────────────────────────────────── */
+.img-ocr-text           {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px 16px;
+    font-family: monospace; font-size: .82rem;
+    color: var(--text); white-space: pre-wrap;
+    word-break: break-word; max-height: 300px;
+    overflow-y: auto; margin: 0;
+    line-height: 1.6;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   PHASE 8 — AI-Generated Content Detection Styles
+   Append to bottom of main.css
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Input card ──────────────────────────────────────────────────────────── */
+.ai-input-card          { margin-bottom: 20px; }
+
+.ai-tab-bar             {
+    display: flex; gap: 8px; margin-bottom: 16px;
+    border-bottom: 1px solid var(--border); padding-bottom: 12px;
+}
+.ai-tab                 {
+    background: transparent; border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text-muted);
+    padding: 7px 18px; cursor: pointer; font-size: .86rem;
+    transition: background .15s, color .15s;
+}
+.ai-tab:hover           { background: var(--bg3); color: var(--text); }
+.ai-tab.active          { background: var(--blue); border-color: var(--blue); color: #fff; }
+
+.ai-tab-panel           { display: none; }
+.ai-tab-panel.active    { display: block; }
+
+.ai-textarea            {
+    width: 100%; min-height: 180px; resize: vertical;
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text);
+    padding: 12px 14px; font-size: .9rem; line-height: 1.6;
+    font-family: inherit; box-sizing: border-box;
+}
+.ai-textarea:focus      { outline: none; border-color: var(--blue); }
+.ai-char-count          {
+    text-align: right; font-size: .76rem;
+    color: var(--text-muted); margin-top: 4px;
+}
+
+.ai-url-input           { width: 100%; }
+.ai-hint                { color: var(--text-muted); font-size: .82rem; margin-top: 8px; }
+
+.ai-drop-zone           {
+    border: 2px dashed var(--border); border-radius: var(--radius);
+    padding: 32px 20px; text-align: center; cursor: pointer;
+    transition: border-color .2s, background .2s;
+}
+.ai-drop-zone:hover,
+.ai-drop-zone.att-drop-active {
+    border-color: var(--blue); background: rgba(56,139,253,.06);
+}
+.ai-drop-icon           { font-size: 2rem; margin-bottom: 8px; }
+.ai-drop-text           { color: var(--text); margin-bottom: 4px; }
+.ai-browse-label        { color: var(--blue); cursor: pointer; text-decoration: underline; }
+.ai-drop-hint           { color: var(--text-muted); font-size: .78rem; }
+.ai-selected-info       {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg3); border-radius: var(--radius);
+    padding: 8px 14px; font-size: .88rem; margin-top: 10px;
+}
+.ai-size-label          { color: var(--text-muted); }
+
+.ai-action-row          { margin-top: 16px; display: flex; align-items: center; gap: 16px; }
+.ai-error               {
+    flex: 1; padding: 8px 14px; border-radius: var(--radius);
+    background: rgba(248,81,73,.12); color: var(--red); font-size: .86rem;
+}
+
+/* ── Verdict + meter row ─────────────────────────────────────────────────── */
+.ai-verdict-row         {
+    display: grid; grid-template-columns: 1fr 1.4fr;
+    gap: 16px; margin-bottom: 16px;
+}
+@media (max-width: 720px) { .ai-verdict-row { grid-template-columns: 1fr; } }
+
+.ai-verdict-body        {
+    display: flex; flex-direction: column;
+    align-items: center; gap: 10px; padding: 28px 16px;
+}
+.ai-verdict-badge       {
+    font-size: 1.4rem; font-weight: 700; letter-spacing: .04em;
+    padding: 8px 26px; border-radius: 30px;
+}
+.ai-verdict-human       { background: rgba(63,185,80,.15);  color: var(--green); }
+.ai-verdict-mixed       { background: rgba(210,153,34,.15); color: var(--amber); }
+.ai-verdict-ai-generated{ background: rgba(248,81,73,.15);  color: var(--red);   }
+.ai-verdict-prob        { font-size: 1.1rem; font-weight: 600; color: var(--text); }
+.ai-verdict-meta        { font-size: .82rem; color: var(--text-muted); }
+.ai-verdict-action      { font-size: .88rem; font-weight: 600; color: var(--text); }
+
+/* ── Probability meter ───────────────────────────────────────────────────── */
+.ai-meter-body          { display: flex; flex-direction: column; gap: 14px; }
+.ai-meter-value         { font-size: 2.2rem; font-weight: 700; color: var(--text); text-align: center; }
+.ai-meter-track         {
+    position: relative; height: 16px; background: var(--bg3);
+    border-radius: 8px; overflow: visible; border: 1px solid var(--border);
+}
+.ai-meter-fill          { height: 100%; border-radius: 8px; transition: width .6s ease; }
+.ai-fill-human          { background: var(--green); }
+.ai-fill-mixed          { background: var(--amber); }
+.ai-fill-ai             { background: var(--red); }
+.ai-meter-marker        {
+    position: absolute; top: -4px; bottom: -4px;
+    width: 2px; background: var(--border);
+}
+.ai-marker-high         { background: rgba(248,81,73,.6); }
+.ai-meter-legend        {
+    display: flex; justify-content: space-between;
+    font-size: .72rem;
+}
+.ai-legend-human        { color: var(--green); }
+.ai-legend-mixed        { color: var(--amber); }
+.ai-legend-ai           { color: var(--red); }
+.ai-meter-stats         {
+    display: flex; gap: 16px; padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+.ai-stat                { display: flex; flex-direction: column; gap: 2px; }
+.ai-stat-label          { font-size: .72rem; color: var(--text-muted); }
+.ai-stat-val            { font-size: .9rem; font-weight: 600; color: var(--text); }
+
+/* ── Explanation ─────────────────────────────────────────────────────────── */
+.ai-explanation         { color: var(--text); line-height: 1.65; font-size: .92rem; margin: 0; }
+
+/* ── Sentence heatmap ────────────────────────────────────────────────────── */
+.ai-heatmap-legend      {
+    margin-left: auto; font-size: .76rem; color: var(--text-muted);
+    display: flex; align-items: center; gap: 10px;
+}
+.ai-dot                 {
+    display: inline-block; width: 10px; height: 10px;
+    border-radius: 50%; margin-right: 3px;
+}
+.ai-dot-human           { background: var(--green); }
+.ai-dot-mixed           { background: var(--amber); }
+.ai-dot-ai              { background: var(--red); }
+
+.ai-heatmap             { display: flex; flex-direction: column; gap: 8px; }
+.ai-sentence            {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 10px 14px; border-radius: var(--radius);
+    border-left: 4px solid transparent;
+}
+.ai-sentence-human       { background: rgba(63,185,80,.07);  border-color: var(--green); }
+.ai-sentence-mixed       { background: rgba(210,153,34,.08); border-color: var(--amber); }
+.ai-sentence-ai-generated{ background: rgba(248,81,73,.09);  border-color: var(--red);   }
+
+.ai-sentence-pct        {
+    font-size: .75rem; font-weight: 700; min-width: 38px;
+    text-align: right; padding-top: 2px; color: var(--text-muted);
+}
+.ai-sentence-text       { font-size: .87rem; color: var(--text); line-height: 1.55; }
+
+/* ── History table extras ────────────────────────────────────────────────── */
+.ai-preview-cell        {
+    max-width: 220px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text-muted); font-size: .82rem;
+}

@@ -33,6 +33,12 @@ from backend.app.models import (
 )
 from backend.app.utils.response import build_response, error_response
 from backend.modules.image_detector import analyze_image
+from backend.modules.ai_detector import (
+    detect_ai_content,
+    extract_text_from_url,
+    extract_text_from_file,
+)
+from backend.modules.image_analyzer import analyze_image
 
 
 logger = logging.getLogger(__name__)
@@ -1107,3 +1113,284 @@ async def debug_email():
         return {"status": "ok", "message": "email_parser imported successfully"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+    
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 7 — Image Analysis
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post(
+    "/scan/image",
+    summary="Analyse an uploaded image for phishing indicators",
+    tags=["Image Analysis"]
+)
+async def scan_image(
+    file: UploadFile = File(...),
+):
+    """
+    Accepts PNG, JPG, GIF, BMP, or WEBP image uploads.
+
+    Runs:
+      • OCR text extraction via Tesseract
+      • Known brand / logo detection in OCR text
+      • Phishing keyword pattern matching
+      • DistilBERT email phishing classifier on extracted text
+      • Risk scoring and verdict (CLEAN / SUSPICIOUS / MALICIOUS)
+      • Persists result to ImageAnalysisScan table
+    """
+    try:
+        file_bytes = await file.read()
+        filename   = file.filename or "unknown_image"
+
+        if not file_bytes:
+            raise HTTPException(status_code=400, detail="Empty file received.")
+
+        result  = analyze_image(file_bytes, filename)
+        verdict = result.get("verdict", "CLEAN")
+        score   = result.get("risk_score", 5.0)
+
+        label_map = {
+            "CLEAN":     "SAFE",
+            "SUSPICIOUS":"SUSPICIOUS",
+            "MALICIOUS": "MALICIOUS",
+        }
+        label  = label_map.get(verdict, "SUSPICIOUS")
+        action = _label_to_action(label)
+
+        db_id = _save_image_scan(result, filename)
+        result["db_id"] = db_id
+
+        return build_response(
+            status="success",
+            risk_score=score,
+            label=label,
+            module_results={"image_analysis": result},
+            explanation=result.get("explanation", "Image analysis complete."),
+            recommended_action=action,
+        ) | {"scan_id": db_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Image scan error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(f"Image analysis failed: {str(e)[:200]}")
+        )
+
+
+# ── Phase 7 DB helper ─────────────────────────────────────────────────────────
+
+def _save_image_scan(result: dict, filename: str) -> Optional[int]:
+    try:
+        import json as _json
+        import datetime
+        from backend.app.models import ImageAnalysisScan
+
+        record = ImageAnalysisScan(
+            filename          = filename[:255],
+            file_size         = result.get("file_size",       0),
+            image_width       = result.get("image_width",     0),
+            image_height      = result.get("image_height",    0),
+            image_format      = result.get("image_format",    "")[:20],
+            ocr_text          = result.get("ocr_text",        "")[:10000],
+            ocr_word_count    = result.get("ocr_word_count",  0),
+            detected_brands   = _json.dumps(result.get("detected_brands",   [])),
+            phishing_keywords = _json.dumps(result.get("phishing_keywords", [])),
+            classifier_label  = result.get("classifier_result",{}).get("label","")[:30],
+            classifier_score  = result.get("classifier_result",{}).get("score", 0.0),
+            verdict           = result.get("verdict",   "CLEAN"),
+            risk_score        = result.get("risk_score",  5.0),
+            scanned_at        = datetime.datetime.utcnow(),
+        )
+        db.session.add(record)
+        db.session.commit()
+        return record.id
+
+    except Exception as e:
+        logger.error(f"ImageAnalysisScan DB save error: {e}")
+        db.session.rollback()
+        return None
+    
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 8 — AI-Generated Content Detection
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AIDetectTextRequest(PydanticBase):
+    text:       str
+    source_ref: Optional[str] = ""
+
+
+class AIDetectURLRequest(PydanticBase):
+    url:        str
+
+
+@router.post(
+    "/scan/ai/text",
+    summary="Detect AI-generated text (plain text input)",
+    tags=["AI Detection"]
+)
+async def scan_ai_text(request: AIDetectTextRequest):
+    """
+    Run chatgpt-detector-roberta against plain text.
+    Returns overall AI probability, per-sentence scores, and verdict.
+    """
+    try:
+        result = detect_ai_content(
+            text=request.text,
+            source_ref=request.source_ref or "",
+            input_type="text",
+        )
+        db_id = _save_ai_detection_scan(result)
+        return build_response(
+            status="success",
+            risk_score=result["risk_score"],
+            label=_ai_verdict_to_label(result["verdict"]),
+            module_results={"ai_detection": result},
+            explanation=result["explanation"],
+            recommended_action=_label_to_action(
+                _ai_verdict_to_label(result["verdict"])
+            ),
+        ) | {"scan_id": db_id}
+
+    except Exception as e:
+        logger.error(f"AI text detect error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.post(
+    "/scan/ai/url",
+    summary="Detect AI-generated content from a URL",
+    tags=["AI Detection"]
+)
+async def scan_ai_url(request: AIDetectURLRequest):
+    """
+    Fetch URL, extract plain text, then run AI detection.
+    """
+    try:
+        text = extract_text_from_url(request.url)
+        if not text.strip():
+            return JSONResponse(
+                status_code=422,
+                content=error_response("Could not extract text from URL.")
+            )
+        result = detect_ai_content(
+            text=text,
+            source_ref=request.url,
+            input_type="url",
+        )
+        db_id = _save_ai_detection_scan(result)
+        return build_response(
+            status="success",
+            risk_score=result["risk_score"],
+            label=_ai_verdict_to_label(result["verdict"]),
+            module_results={"ai_detection": result},
+            explanation=result["explanation"],
+            recommended_action=_label_to_action(
+                _ai_verdict_to_label(result["verdict"])
+            ),
+        ) | {"scan_id": db_id}
+
+    except Exception as e:
+        logger.error(f"AI URL detect error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+@router.post(
+    "/scan/ai/file",
+    summary="Detect AI-generated content from an uploaded file",
+    tags=["AI Detection"]
+)
+async def scan_ai_file(
+    file: UploadFile = File(...),
+):
+    """
+    Extract text from uploaded file (txt, html, eml, pdf, docx),
+    then run AI detection.
+    """
+    try:
+        file_bytes = await file.read()
+        filename   = file.filename or "unknown"
+
+        if not file_bytes:
+            raise HTTPException(status_code=400, detail="Empty file.")
+
+        text = extract_text_from_file(file_bytes, filename)
+        if not text.strip():
+            return JSONResponse(
+                status_code=422,
+                content=error_response(
+                    "Could not extract text from file. "
+                    "Supported: txt, html, eml, pdf, docx."
+                )
+            )
+
+        result = detect_ai_content(
+            text=text,
+            source_ref=filename,
+            input_type="file",
+        )
+        db_id = _save_ai_detection_scan(result)
+        return build_response(
+            status="success",
+            risk_score=result["risk_score"],
+            label=_ai_verdict_to_label(result["verdict"]),
+            module_results={"ai_detection": result},
+            explanation=result["explanation"],
+            recommended_action=_label_to_action(
+                _ai_verdict_to_label(result["verdict"])
+            ),
+        ) | {"scan_id": db_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"AI file detect error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e))
+        )
+
+
+# ── Phase 8 helpers ───────────────────────────────────────────────────────────
+
+def _ai_verdict_to_label(verdict: str) -> str:
+    return {
+        "HUMAN":        "SAFE",
+        "MIXED":        "SUSPICIOUS",
+        "AI_GENERATED": "MALICIOUS",
+    }.get(verdict, "SUSPICIOUS")
+
+
+def _save_ai_detection_scan(result: dict) -> Optional[int]:
+    try:
+        import json as _json
+        import datetime
+        from backend.app.models import AIDetectionScan
+
+        record = AIDetectionScan(
+            input_type     = result.get("input_type",     "text"),
+            source_ref     = result.get("source_ref",     "")[:512],
+            input_preview  = result.get("input_preview",  "")[:500],
+            char_count     = result.get("char_count",     0),
+            sentence_count = result.get("sentence_count", 0),
+            ai_probability = result.get("ai_probability", 0.0),
+            verdict        = result.get("verdict",        "HUMAN"),
+            risk_score     = result.get("risk_score",     0.0),
+            sentence_scores= _json.dumps(result.get("sentence_scores", [])),
+            scanned_at     = datetime.datetime.utcnow(),
+        )
+        db.session.add(record)
+        db.session.commit()
+        return record.id
+
+    except Exception as e:
+        logger.error(f"AIDetectionScan DB save error: {e}")
+        db.session.rollback()
+        return None

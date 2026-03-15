@@ -224,3 +224,37 @@ class FeedbackSample(db.Model):
     predicted   = db.Column(db.String(20))         # what the model said
     labeled_by  = db.Column(db.String(100))        # analyst username
     labeled_at  = db.Column(db.DateTime, default=datetime.utcnow)
+
+class AIDetectionScan(db.Model):
+    __tablename__ = "ai_detection_scans"
+
+    id             = db.Column(db.Integer,  primary_key=True)
+    input_type     = db.Column(db.String(20),  default="text")   # text | url | file
+    source_ref     = db.Column(db.String(512),  default="")      # URL or filename
+    input_preview  = db.Column(db.Text,         default="")      # first 500 chars
+    char_count     = db.Column(db.Integer,      default=0)
+    sentence_count = db.Column(db.Integer,      default=0)
+    ai_probability = db.Column(db.Float,        default=0.0)     # 0.0 – 1.0
+    verdict        = db.Column(db.String(30),   default="HUMAN") # HUMAN | MIXED | AI_GENERATED
+    risk_score     = db.Column(db.Float,        default=0.0)     # 0–100
+    sentence_scores= db.Column(db.Text,         default="[]")    # JSON list
+    scanned_at     = db.Column(db.DateTime,     default=datetime.utcnow)
+
+class ImageAnalysisScan(db.Model):
+    __tablename__ = "image_analysis_scans"
+
+    id               = db.Column(db.Integer,  primary_key=True)
+    filename         = db.Column(db.String(255), default="")
+    file_size        = db.Column(db.Integer,     default=0)
+    image_width      = db.Column(db.Integer,     default=0)
+    image_height     = db.Column(db.Integer,     default=0)
+    image_format     = db.Column(db.String(20),  default="")
+    ocr_text         = db.Column(db.Text,        default="")
+    ocr_word_count   = db.Column(db.Integer,     default=0)
+    detected_brands  = db.Column(db.Text,        default="[]")   # JSON list
+    phishing_keywords= db.Column(db.Text,        default="[]")   # JSON list
+    classifier_label = db.Column(db.String(30),  default="")
+    classifier_score = db.Column(db.Float,       default=0.0)
+    verdict          = db.Column(db.String(30),  default="CLEAN")
+    risk_score       = db.Column(db.Float,       default=0.0)
+    scanned_at       = db.Column(db.DateTime,    default=datetime.utcnow)
