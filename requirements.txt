@@ -64,4 +64,4 @@ colorlog==6.8.2
 
 # Testing
 pytest==8.2.2
-pytest-cov==5.0.0s
+pytest-cov==5.0.0
