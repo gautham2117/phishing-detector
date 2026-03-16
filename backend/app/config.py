@@ -59,7 +59,7 @@ class Config:
 
     # Optional external API keys
     VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "3979298a0130dc78c7a03a77ec7dd89cacaff5ddaf90e25c2b002059ee74b875")
-    IPINFO_TOKEN       = os.environ.get("IPINFO_TOKEN", "")
+    IPINFO_TOKEN       = os.environ.get("IPINFO_TOKEN", "661042d7109519")
 
 
 class DevelopmentConfig(Config):
