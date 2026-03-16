@@ -58,7 +58,7 @@ class Config:
     REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
     # Optional external API keys
-    VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "")
+    VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "3979298a0130dc78c7a03a77ec7dd89cacaff5ddaf90e25c2b002059ee74b875")
     IPINFO_TOKEN       = os.environ.get("IPINFO_TOKEN", "")
 
 
