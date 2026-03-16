@@ -1,6 +1,22 @@
 # backend/api/scan_router.py
 # FastAPI route handlers for all scan endpoints.
-# Phases 1–13 fully integrated with auto-alert hooks.
+# Phases 1–16 fully integrated with auto-alert hooks.
+#
+# FIXES APPLIED:
+#   1. All _save_* helpers now wrap DB ops in _flask_ctx()
+#   2. scan_url / scan_url_batch / extension_scan now correctly extract
+#      risk_score + label from url_intelligence result (was using
+#      non-existent result["risk_score"] / result["label"] keys)
+#   3. _save_url_scan now uses correct field names:
+#        raw_url  (was "original_url")   final_url (was "normalized_url")
+#        ip       (was ip.ip_address)    country   (was ip.country)
+#        ssl.is_valid (was ssl.valid)
+#   4. _build_url_explanation now uses correct fields:
+#        domain_age_flag / domain_age_days at result level (not inside whois)
+#        redirect_chain / redirect_count   (was result["redirects"]["hop_count"])
+#   5. scan_url_batch now calls analyze_url() per-URL instead of passing
+#      List[str] to analyze_url_batch() which expects List[dict]
+#   6. _save_email_scan wrapped in _flask_ctx()
 
 import io as _io
 import json
@@ -13,7 +29,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel as PydanticBase
 
 from backend.modules.email_parser       import parse_email
-from backend.modules.url_intelligence   import analyze_url, analyze_url_batch
+from backend.modules.url_intelligence   import analyze_url
 from backend.modules.network_scanner    import scan_target, is_demo_target
 from backend.modules.rule_engine        import (
     analyze_url_rules, analyze_email_rules, get_all_rules
@@ -21,7 +37,7 @@ from backend.modules.rule_engine        import (
 from backend.modules.ml_url_classifier  import classify_url, classify_url_batch
 from backend.modules.file_analyzer      import analyze_file
 from backend.modules.image_analyzer     import analyze_image
-from backend.modules.ai_detector import (
+from backend.modules.ai_detector        import (
     detect_ai_content,
     extract_text_from_url,
     extract_text_from_file,
@@ -30,8 +46,8 @@ from backend.modules.platform_monitor   import (
     scan_target_full, extract_domain,
     get_due_targets, get_unified_feed
 )
-from backend.modules.risk_engine    import aggregate_risk_scores
-from backend.modules.realtime_monitor       import (
+from backend.modules.risk_engine        import aggregate_risk_scores
+from backend.modules.realtime_monitor   import (
     get_live_feed, get_live_stats, get_alerts_above_threshold
 )
 from backend.modules.model_manager      import (
@@ -46,8 +62,8 @@ from backend.modules.alert_engine       import (
     get_audit_log, get_alert_stats,
 )
 
-from backend.app.database  import db
-from backend.app.models    import (
+from backend.app.database import db
+from backend.app.models   import (
     EmailScan, URLScan, NetworkScan, PortResult,
     AttachmentScan, AIDetectionScan, ImageAnalysisScan,
     MonitoredTarget, MonitorScanResult,
@@ -218,6 +234,50 @@ def _risk_level_to_label(risk_level: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX 1 — URL result score/label extractor
+# analyze_url() returns risk_contribution (0-15 scale) and ml_result.score
+# (0-1). This helper derives a unified 0-100 risk_score and label from those.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_url_risk(result: dict) -> tuple:
+    """
+    Extract (risk_score: float 0-100, label: str) from an analyze_url() result.
+
+    analyze_url() does NOT return a top-level risk_score or label.
+    It returns:
+      - ml_result.score  : 0.0-1.0  phishing probability from BERT
+      - flags            : list of flag dicts with "severity" keys
+      - domain_age_flag  : bool
+      - risk_contribution: 0-15 (email-level weight, not used here)
+    """
+    ml       = result.get("ml_result", {})
+    ml_score = float(ml.get("score", 0.0))
+
+    # Base score from ML model (0-100)
+    base_score = round(ml_score * 100, 2)
+
+    # Add penalties for high/medium severity URL flags (cap at 20 pts)
+    flags = result.get("flags", [])
+    flag_penalty = 0.0
+    for f in flags:
+        sev = f.get("severity", "low")
+        if sev == "high":
+            flag_penalty += 8.0
+        elif sev == "medium":
+            flag_penalty += 4.0
+        else:
+            flag_penalty += 1.0
+    flag_penalty = min(flag_penalty, 20.0)
+
+    # Young domain adds risk
+    age_penalty = 5.0 if result.get("domain_age_flag") else 0.0
+
+    risk_score = min(round(base_score + flag_penalty + age_penalty, 2), 100.0)
+    label      = _score_to_label(risk_score)
+    return risk_score, label
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Phase 13 — Auto-alert helper
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -376,23 +436,34 @@ async def scan_email_file(
              tags=["URL Scanning"])
 async def scan_url(request: URLScanRequest):
     try:
-        result  = analyze_url(request.url)
+        result = analyze_url(request.url)
+
+        # FIX: analyze_url() has no top-level risk_score / label.
+        # Derive them from ml_result + flags.
+        risk_score, label    = _extract_url_risk(result)
+        action               = _label_to_action(label)
+
+        # Attach for downstream helpers (_save_url_scan, explanation, etc.)
+        result["risk_score"] = risk_score
+        result["label"]      = label
+
         scan_id = _save_url_scan(result, email_id=None)
 
         _auto_alert(
             "URL", "url", scan_id,
-            result["risk_score"], result["label"],
-            _label_to_action(result["label"]),
-            findings={"flags": result.get("flags", [])},
+            risk_score, label, action,
+            findings={
+                "flags": [f.get("flag", "") for f in result.get("flags", [])]
+            },
         )
 
         return build_response(
             status="success",
-            risk_score=result["risk_score"],
-            label=result["label"],
+            risk_score=risk_score,
+            label=label,
             module_results={"url_intelligence": result},
             explanation=_build_url_explanation(result),
-            recommended_action=_label_to_action(result["label"]),
+            recommended_action=action,
         ) | {"scan_id": scan_id}
 
     except Exception as e:
@@ -415,11 +486,18 @@ async def scan_url_batch(
         raise HTTPException(status_code=400, detail="Batch limit is 50 URLs.")
 
     try:
-        results = analyze_url_batch(urls)
-        for result in results:
-            _save_url_scan(result, email_id=email_scan_id)
+        # FIX: analyze_url_batch() expects List[dict] with "raw" key but was
+        # called with List[str] — use direct per-URL loop to avoid TypeError.
+        results = []
+        for url in urls:
+            r                = analyze_url(url)
+            rs, lbl          = _extract_url_risk(r)
+            r["risk_score"]  = rs
+            r["label"]       = lbl
+            results.append(r)
+            _save_url_scan(r, email_id=email_scan_id)
 
-        max_score = max((r["risk_score"] for r in results), default=0)
+        max_score = max((r["risk_score"] for r in results), default=0.0)
         max_label = _score_to_label(max_score)
 
         return build_response(
@@ -431,7 +509,7 @@ async def scan_url_batch(
                     "total_urls": len(results),
                     "malicious":  sum(1 for r in results if r["label"] == "MALICIOUS"),
                     "suspicious": sum(1 for r in results if r["label"] == "SUSPICIOUS"),
-                    "benign":     sum(1 for r in results if r["label"] == "BENIGN"),
+                    "safe":       sum(1 for r in results if r["label"] == "SAFE"),
                     "results":    results,
                 }
             },
@@ -565,10 +643,11 @@ async def scan_email_rules(request: RuleScanEmailRequest):
 @router.get("/rules/list", summary="List all heuristic rules",
             tags=["Rule Engine"])
 async def list_all_rules():
+    all_rules = get_all_rules()
     return {
         "status": "success",
-        "rules":  get_all_rules(),
-        "total":  len(get_all_rules()),
+        "rules":  all_rules,
+        "total":  len(all_rules),
     }
 
 
@@ -679,9 +758,9 @@ async def scan_file(
         verdict = result.get("verdict", "CLEAN")
 
         label_map = {
-            "CLEAN":     "SAFE",
-            "SUSPICIOUS":"SUSPICIOUS",
-            "MALICIOUS": "MALICIOUS",
+            "CLEAN":      "SAFE",
+            "SUSPICIOUS": "SUSPICIOUS",
+            "MALICIOUS":  "MALICIOUS",
         }
         label  = label_map.get(verdict, "SUSPICIOUS")
         action = _label_to_action(label)
@@ -742,9 +821,9 @@ async def scan_image(file: UploadFile = File(...)):
         score   = result.get("risk_score", 5.0)
 
         label_map = {
-            "CLEAN":     "SAFE",
-            "SUSPICIOUS":"SUSPICIOUS",
-            "MALICIOUS": "MALICIOUS",
+            "CLEAN":      "SAFE",
+            "SUSPICIOUS": "SUSPICIOUS",
+            "MALICIOUS":  "MALICIOUS",
         }
         label  = label_map.get(verdict, "SUSPICIOUS")
         action = _label_to_action(label)
@@ -1165,9 +1244,9 @@ async def aggregate_risk(req: AggregateRequest):
 
             verdict = result["verdict"]
             label   = {
-                "CLEAN":     "SAFE",
-                "SUSPICIOUS":"SUSPICIOUS",
-                "MALICIOUS": "MALICIOUS",
+                "CLEAN":      "SAFE",
+                "SUSPICIOUS": "SUSPICIOUS",
+                "MALICIOUS":  "MALICIOUS",
             }.get(verdict, "SUSPICIOUS")
 
             db_id = _save_aggregated_score(result, req)
@@ -1542,7 +1621,7 @@ async def api_audit_log(limit: int = 100):
         return {"status": "success", "logs": logs, "total": len(logs)}
     except Exception as e:
         return JSONResponse(status_code=500, content=error_response(str(e)))
-    
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 14 — Browser Extension endpoints
@@ -1566,10 +1645,13 @@ async def extension_scan(req: ExtensionScanRequest):
     """
     try:
         # ── Run URL intelligence ───────────────────────────────────────────
-        result = analyze_url(req.url)
-        score  = result.get("risk_score", 0.0)
-        label  = result.get("label", "SAFE")
-        action = _label_to_action(label)
+        result               = analyze_url(req.url)
+
+        # FIX: derive score/label — analyze_url() has no top-level risk_score
+        score, label         = _extract_url_risk(result)
+        result["risk_score"] = score
+        result["label"]      = label
+        action               = _label_to_action(label)
 
         # ── Generate BART threat summary ───────────────────────────────────
         threat_summary = ""
@@ -1577,15 +1659,19 @@ async def extension_scan(req: ExtensionScanRequest):
             from backend.ml.model_loader import get_model
             pipeline = get_model("threat_summarizer")
             if pipeline:
-                flags   = result.get("flags", [])
-                domain  = result.get("domain", req.url)
+                flags      = result.get("flags", [])
+                domain     = result.get("domain", req.url)
+                flag_names = [
+                    f.get("flag", f.get("description", ""))
+                    for f in flags[:5]
+                ] if flags else []
                 input_text = (
                     f"URL scan result. Domain: {domain}. "
                     f"Risk score: {score}/100. Label: {label}. "
-                    f"Flags: {', '.join(flags[:5]) if flags else 'none'}. "
-                    f"SSL valid: {result.get('ssl', {}).get('valid', False)}. "
+                    f"Flags: {', '.join(flag_names) if flag_names else 'none'}. "
+                    f"SSL valid: {result.get('ssl', {}).get('is_valid', False)}. "
                     f"Domain age days: "
-                    f"{result.get('whois', {}).get('domain_age_days', 'unknown')}."
+                    f"{result.get('domain_age_days', 'unknown')}."
                 )
                 output = pipeline(
                     input_text[:512],
@@ -1597,21 +1683,24 @@ async def extension_scan(req: ExtensionScanRequest):
                     threat_summary = output[0].get("summary_text", "").strip()
         except Exception as bart_ex:
             logger.warning("Extension BART summary failed: %s", bart_ex)
-            threat_summary = _build_url_explanation(result) or f"{label} — risk score {score:.1f}/100."
+            threat_summary = _build_url_explanation(result)
 
         if not threat_summary:
-            threat_summary = _build_url_explanation(result) or f"{label} — risk score {score:.1f}/100."
+            threat_summary = (
+                _build_url_explanation(result)
+                or f"{label} — risk score {score:.1f}/100."
+            )
 
         # ── Save to ExtensionScan table ────────────────────────────────────
         db_id = None
         try:
             with _flask_ctx():
                 from urllib.parse import urlparse
-                domain = urlparse(req.url).netloc or req.url
+                domain_parsed = urlparse(req.url).netloc or req.url
 
                 record = ExtensionScan(
                     url                = req.url[:2048],
-                    domain             = domain[:255],
+                    domain             = domain_parsed[:255],
                     risk_score         = score,
                     label              = label[:30],
                     verdict            = label[:30],
@@ -1635,7 +1724,9 @@ async def extension_scan(req: ExtensionScanRequest):
         _auto_alert(
             "Extension", "url", db_id,
             score, label, action,
-            findings={"flags": result.get("flags", [])},
+            findings={
+                "flags": [f.get("flag", "") for f in result.get("flags", [])]
+            },
         )
 
         return {
@@ -1648,10 +1739,12 @@ async def extension_scan(req: ExtensionScanRequest):
             "recommended_action": action,
             "scan_id":            db_id,
             "details": {
-                "domain":         result.get("domain", ""),
-                "ssl_valid":      result.get("ssl", {}).get("valid", False),
-                "domain_age":     result.get("whois", {}).get("domain_age_days"),
-                "flags":          result.get("flags", [])[:5],
+                "domain":     result.get("domain", ""),
+                "ssl_valid":  result.get("ssl", {}).get("is_valid", False),
+                "domain_age": result.get("domain_age_days"),
+                "flags":      [
+                    f.get("flag", "") for f in result.get("flags", [])[:5]
+                ],
             },
         }
 
@@ -1710,6 +1803,7 @@ async def extension_status():
         "message": "PhishGuard backend is running.",
     }
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 15 — System Architecture & Health
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1720,12 +1814,8 @@ async def extension_status():
     tags=["System Architecture"]
 )
 async def architecture_health():
-    """
-    Concurrently pings all module endpoints and returns
-    Online / Degraded / Offline status with latency.
-    """
     try:
-        results = check_module_health()
+        results  = check_module_health()
         online   = sum(1 for r in results if r["status"] == "online")
         degraded = sum(1 for r in results if r["status"] == "degraded")
         offline  = sum(1 for r in results if r["status"] == "offline")
@@ -1762,10 +1852,6 @@ async def architecture_health():
     tags=["System Architecture"]
 )
 async def architecture_metrics():
-    """
-    Returns system metrics, DB table stats, and request rate.
-    Polled every 5 seconds by the dashboard.
-    """
     try:
         sys_metrics  = get_system_metrics()
         rate_history = get_request_rate_history(buckets=10)
@@ -1775,12 +1861,12 @@ async def architecture_metrics():
             db_stats = get_db_stats()
 
         return {
-            "status":          "success",
-            "system":          sys_metrics,
-            "requests_per_min":rpm,
-            "rate_history":    rate_history,
-            "database":        db_stats,
-            "timestamp":       datetime.datetime.utcnow().isoformat() + "Z",
+            "status":           "success",
+            "system":           sys_metrics,
+            "requests_per_min": rpm,
+            "rate_history":     rate_history,
+            "database":         db_stats,
+            "timestamp":        datetime.datetime.utcnow().isoformat() + "Z",
         }
     except Exception as e:
         logger.error(f"Metrics error: {e}", exc_info=True)
@@ -1796,10 +1882,6 @@ async def architecture_metrics():
     tags=["System Architecture"]
 )
 async def architecture_migration_plan():
-    """
-    Returns the full structured SQLite → PostgreSQL migration plan
-    with Alembic schema versioning workflow.
-    """
     try:
         plan = get_migration_plan()
         return {"status": "success", "plan": plan}
@@ -1808,15 +1890,16 @@ async def architecture_migration_plan():
             status_code=500,
             content=error_response(str(e))
         )
-    
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 16 — Multi-Language Threat Explanation & Awareness Engine
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ExplainRequest(PydanticBase):
     text:       str
-    verdict:    Optional[str] = ""
-    module:     Optional[str] = ""
+    verdict:    Optional[str]   = ""
+    module:     Optional[str]   = ""
     risk_score: Optional[float] = 0.0
 
 
@@ -1837,11 +1920,6 @@ class TipsRequest(PydanticBase):
     tags=["Threat Explanation"]
 )
 async def threat_explain(req: ExplainRequest):
-    """
-    Generate a plain-language 2-3 sentence explanation of a threat
-    using BART (facebook/bart-large-cnn).
-    Falls back to rule-based explanation if model unavailable.
-    """
     try:
         explanation = generate_explanation(
             raw_text   = req.text,
@@ -1876,10 +1954,6 @@ async def threat_explain(req: ExplainRequest):
     tags=["Threat Explanation"]
 )
 async def threat_translate(req: TranslateRequest):
-    """
-    Translate English threat text into the requested language
-    using Helsinki-NLP MarianMT model (lazy-loaded on first request).
-    """
     try:
         if not req.text or not req.lang_code:
             raise HTTPException(
@@ -1907,10 +1981,6 @@ async def threat_translate(req: TranslateRequest):
     tags=["Threat Explanation"]
 )
 async def threat_tips(req: TipsRequest):
-    """
-    Return tailored security awareness tips based on
-    verdict, module, and detected threat content.
-    """
     try:
         tips = get_security_tips(
             verdict  = req.verdict  or "",
@@ -1931,7 +2001,6 @@ async def threat_tips(req: TipsRequest):
     tags=["Threat Explanation"]
 )
 async def threat_languages():
-    """Return metadata for all supported translation languages."""
     try:
         languages = get_supported_languages()
         return {
@@ -1994,37 +2063,50 @@ def _build_email_explanation(parsed: dict, label: str) -> str:
     return " ".join(parts) or f"Email assessed as {label}."
 
 
-def _save_email_scan(parsed: dict, risk_score: float,
-                     label: str, filename: str = "") -> Optional[int]:
+def _save_email_scan(
+    parsed: dict,
+    risk_score: float,
+    label: str,
+    filename: str = ""
+) -> Optional[int]:
+    """
+    FIX: wrap all DB operations in _flask_ctx() so FastAPI can
+    write to the Flask-managed SQLAlchemy session.
+    """
     try:
-        scan = EmailScan(
-            filename     = filename or "pasted_email",
-            sender       = parsed.get("sender",    ""),
-            recipient    = parsed.get("recipient", ""),
-            subject      = parsed.get("subject",   ""),
-            body_text    = parsed.get("body_text", "")[:5000],
-            body_html    = parsed.get("body_html", "")[:10000],
-            headers_raw  = json.dumps(parsed.get("headers", {})),
-            spf_result   = parsed.get("auth_results", {}).get("spf",   "none"),
-            dkim_result  = parsed.get("auth_results", {}).get("dkim",  "none"),
-            dmarc_result = parsed.get("auth_results", {}).get("dmarc", "none"),
-            risk_score   = risk_score,
-            label        = label,
-        )
-        db.session.add(scan)
-        db.session.flush()
-        for url_data in parsed.get("urls", []):
-            db.session.add(URLScan(
-                email_id       = scan.id,
-                raw_url        = url_data.get("raw",        "")[:2048],
-                normalized_url = url_data.get("normalized", "")[:2048],
-                domain         = url_data.get("domain",     "")[:255],
-            ))
-        db.session.commit()
-        return scan.id
+        with _flask_ctx():
+            scan = EmailScan(
+                filename     = filename or "pasted_email",
+                sender       = parsed.get("sender",    ""),
+                recipient    = parsed.get("recipient", ""),
+                subject      = parsed.get("subject",   ""),
+                body_text    = parsed.get("body_text", "")[:5000],
+                body_html    = parsed.get("body_html", "")[:10000],
+                headers_raw  = json.dumps(parsed.get("headers", {})),
+                spf_result   = parsed.get("auth_results", {}).get("spf",   "none"),
+                dkim_result  = parsed.get("auth_results", {}).get("dkim",  "none"),
+                dmarc_result = parsed.get("auth_results", {}).get("dmarc", "none"),
+                risk_score   = risk_score,
+                label        = label,
+            )
+            db.session.add(scan)
+            db.session.flush()
+            for url_data in parsed.get("urls", []):
+                db.session.add(URLScan(
+                    email_id       = scan.id,
+                    raw_url        = url_data.get("raw",        "")[:2048],
+                    normalized_url = url_data.get("normalized", "")[:2048],
+                    domain         = url_data.get("domain",     "")[:255],
+                ))
+            db.session.commit()
+            return scan.id
     except Exception as e:
         logger.error(f"EmailScan DB save error: {e}")
-        db.session.rollback()
+        try:
+            with _flask_ctx():
+                db.session.rollback()
+        except Exception:
+            pass
         return None
 
 
@@ -2033,17 +2115,29 @@ def _save_email_scan(parsed: dict, risk_score: float,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_url_explanation(result: dict) -> str:
-    from urllib.parse import urlparse
+    """
+    FIX: analyze_url() returns a flat result dict — field names corrected:
+      - ml_result.label  checked correctly via result.get("ml_result", {})
+      - domain_age_flag  at result level  (not whois["is_young_domain"])
+      - domain_age_days  at result level  (not whois["domain_age_days"])
+      - redirect_count   at result level  (not result["redirects"]["hop_count"])
+      - redirect_chain[-1] for final URL  (not result["redirects"]["final_url"])
+      - ssl.is_valid      (not ssl["valid"] — key does not exist in ssl_check)
+    """
     parts = []
+
     ml = result.get("ml_result", {})
     if ml.get("label") == "MALICIOUS":
         parts.append(
             f"ML model classified URL as malicious "
             f"({int(ml.get('score', 0) * 100)}% confidence)."
         )
-    w = result.get("whois", {})
-    if w.get("is_young_domain"):
-        parts.append(f"Domain is only {w.get('domain_age_days')} days old.")
+
+    # FIX: domain_age_flag is at result level, not inside the whois dict
+    if result.get("domain_age_flag"):
+        age = result.get("domain_age_days", "unknown")
+        parts.append(f"Domain is only {age} days old.")
+
     s = result.get("ssl", {})
     if not s.get("has_ssl"):
         parts.append("URL uses plain HTTP — no SSL.")
@@ -2051,45 +2145,76 @@ def _build_url_explanation(result: dict) -> str:
         parts.append("SSL certificate is self-signed.")
     elif s.get("is_expired"):
         parts.append("SSL certificate has expired.")
-    r = result.get("redirects", {})
-    if r.get("hop_count", 0) > 2:
-        final = urlparse(r.get("final_url", "")).netloc
+
+    # FIX: redirect_count is at result level, not inside result["redirects"]
+    hop_count = result.get("redirect_count", 0)
+    if hop_count > 2:
+        chain        = result.get("redirect_chain", [])
+        final        = chain[-1] if chain else ""
+        from urllib.parse import urlparse
+        final_domain = urlparse(final).netloc if final else ""
         parts.append(
-            f"Redirects through {r['hop_count']} hops "
-            f"(final: {final})."
+            f"Redirects through {hop_count} hops"
+            + (f" (final: {final_domain})" if final_domain else "") + "."
         )
+
+    # Flag summary fallback
     flags = result.get("flags", [])
     if not parts and flags:
-        parts.append(f"Risk flags: {', '.join(flags[:3])}.")
+        flag_names = [f.get("flag", f.get("description", "")) for f in flags[:3]]
+        parts.append(
+            f"Risk flags: {', '.join(n for n in flag_names if n)}."
+        )
+
     return " ".join(parts) or "URL analyzed — no high-risk indicators."
 
 
-def _save_url_scan(result: dict,
-                   email_id: Optional[int] = None) -> Optional[int]:
+def _save_url_scan(
+    result: dict,
+    email_id: Optional[int] = None
+) -> Optional[int]:
+    """
+    FIX 1: wrapped in _flask_ctx() — FastAPI cannot use Flask DB session
+            without an active app context.
+    FIX 2: field name corrections to match analyze_url() return dict keys:
+            raw_url       (was "original_url"  — key does not exist)
+            final_url     (was "normalized_url" — key does not exist)
+            ip            string (was ip.ip_address — ip is already a string)
+            country       string (was ip.country    — same issue)
+            ssl.is_valid  (was ssl.valid — "valid" key does not exist in
+                           ssl_check() return dict; correct key is "is_valid")
+    """
     try:
-        scan = URLScan(
-            email_id        = email_id,
-            raw_url         = result.get("original_url",   "")[:2048],
-            normalized_url  = result.get("normalized_url", "")[:2048],
-            domain          = result.get("domain",         "")[:255],
-            ip_address      = result.get("ip",  {}).get("ip_address", ""),
-            country         = result.get("ip",  {}).get("country",    ""),
-            whois_data      = json.dumps(result.get("whois", {})),
-            domain_age_days = result.get("whois", {}).get("domain_age_days"),
-            ssl_valid       = result.get("ssl",  {}).get("valid",  False),
-            ssl_issuer      = (result.get("ssl", {}).get("issuer") or "")[:255],
-            redirect_chain  = json.dumps(
-                result.get("redirects", {}).get("chain", [])
-            ),
-            ml_score        = result.get("ml_result", {}).get("score", 0.0),
-            final_label     = result.get("label", "UNKNOWN"),
-        )
-        db.session.add(scan)
-        db.session.commit()
-        return scan.id
+        with _flask_ctx():
+            scan = URLScan(
+                email_id        = email_id,
+                raw_url         = result.get("raw_url",   "")[:2048],
+                normalized_url  = result.get("final_url", "")[:2048],
+                domain          = result.get("domain",    "")[:255],
+                ip_address      = result.get("ip",        ""),
+                country         = result.get("country",   ""),
+                whois_data      = json.dumps(result.get("whois", {})),
+                domain_age_days = result.get("domain_age_days"),
+                ssl_valid       = result.get("ssl", {}).get("is_valid", False),
+                ssl_issuer      = (
+                    result.get("ssl", {}).get("issuer") or ""
+                )[:255],
+                redirect_chain  = json.dumps(
+                    result.get("redirect_chain", [])
+                ),
+                ml_score        = result.get("ml_result", {}).get("score", 0.0),
+                final_label     = result.get("label", "UNKNOWN"),
+            )
+            db.session.add(scan)
+            db.session.commit()
+            return scan.id
     except Exception as e:
         logger.error(f"URLScan DB save error: {e}")
-        db.session.rollback()
+        try:
+            with _flask_ctx():
+                db.session.rollback()
+        except Exception:
+            pass
         return None
 
 
@@ -2125,43 +2250,49 @@ def _build_network_explanation(result: dict) -> str:
 
 
 def _save_network_scan(result: dict) -> Optional[int]:
+    """FIX: wrapped in _flask_ctx()."""
     try:
-        scan = NetworkScan(
-            url_scan_id      = result.get("url_scan_id"),
-            email_scan_id    = result.get("email_scan_id"),
-            target           = result.get("target",        "")[:255],
-            ip_resolved      = (result.get("ip_resolved") or "")[:60],
-            scan_type        = result.get("scan_type",     ""),
-            nmap_version     = result.get("nmap_version",  ""),
-            os_guess         = result.get("os_guess",      ""),
-            total_open_ports = result.get("open_port_count", 0),
-            risk_level       = result.get("risk_level",   "UNKNOWN"),
-            risk_flags       = json.dumps(result.get("risk_flags", [])),
-            raw_nmap_output  = result.get("raw_nmap_output", ""),
-            scan_duration_s  = result.get("scan_duration_s",  0),
-            authorized       = result.get("authorized",   False),
-        )
-        db.session.add(scan)
-        db.session.flush()
-        for p in result.get("ports", []):
-            db.session.add(PortResult(
-                network_scan_id  = scan.id,
-                port             = p.get("port"),
-                protocol         = p.get("protocol",        "tcp"),
-                state            = p.get("state",           "open"),
-                service_name     = p.get("service_name",    "")[:100],
-                service_product  = p.get("service_product", "")[:255],
-                service_version  = p.get("service_version", "")[:255],
-                service_extra    = p.get("service_extra",   "")[:500],
-                is_dangerous     = p.get("is_dangerous",    False),
-                danger_reason    = p.get("danger_reason",   "")[:255],
-                cpe              = p.get("cpe",             "")[:255],
-            ))
-        db.session.commit()
-        return scan.id
+        with _flask_ctx():
+            scan = NetworkScan(
+                url_scan_id      = result.get("url_scan_id"),
+                email_scan_id    = result.get("email_scan_id"),
+                target           = result.get("target",        "")[:255],
+                ip_resolved      = (result.get("ip_resolved") or "")[:60],
+                scan_type        = result.get("scan_type",     ""),
+                nmap_version     = result.get("nmap_version",  ""),
+                os_guess         = result.get("os_guess",      ""),
+                total_open_ports = result.get("open_port_count", 0),
+                risk_level       = result.get("risk_level",   "UNKNOWN"),
+                risk_flags       = json.dumps(result.get("risk_flags", [])),
+                raw_nmap_output  = result.get("raw_nmap_output", ""),
+                scan_duration_s  = result.get("scan_duration_s",  0),
+                authorized       = result.get("authorized",   False),
+            )
+            db.session.add(scan)
+            db.session.flush()
+            for p in result.get("ports", []):
+                db.session.add(PortResult(
+                    network_scan_id  = scan.id,
+                    port             = p.get("port"),
+                    protocol         = p.get("protocol",        "tcp"),
+                    state            = p.get("state",           "open"),
+                    service_name     = p.get("service_name",    "")[:100],
+                    service_product  = p.get("service_product", "")[:255],
+                    service_version  = p.get("service_version", "")[:255],
+                    service_extra    = p.get("service_extra",   "")[:500],
+                    is_dangerous     = p.get("is_dangerous",    False),
+                    danger_reason    = p.get("danger_reason",   "")[:255],
+                    cpe              = p.get("cpe",             "")[:255],
+                ))
+            db.session.commit()
+            return scan.id
     except Exception as e:
         logger.error(f"NetworkScan DB save error: {e}")
-        db.session.rollback()
+        try:
+            with _flask_ctx():
+                db.session.rollback()
+        except Exception:
+            pass
         return None
 
 
@@ -2187,30 +2318,38 @@ def _build_rules_explanation(result: dict) -> str:
 # Phase 6 helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _save_attachment_scan(result: dict,
-                          filename: str,
-                          email_scan_id: Optional[int]) -> Optional[int]:
+def _save_attachment_scan(
+    result: dict,
+    filename: str,
+    email_scan_id: Optional[int]
+) -> Optional[int]:
+    """FIX: wrapped in _flask_ctx()."""
     try:
-        hashes = result.get("hashes", {})
-        record = AttachmentScan(
-            email_id     = email_scan_id,
-            filename     = filename[:255],
-            file_type    = result.get("file_type",  "")[:255],
-            md5          = hashes.get("md5",   "")[:64],
-            sha256       = hashes.get("sha256","")[:64],
-            file_size    = result.get("file_size",   0),
-            entropy      = result.get("entropy",     0.0),
-            yara_matches = json.dumps(result.get("yara_matches",      [])),
-            static_finds = json.dumps(result.get("suspicious_strings",[])),
-            verdict      = result.get("verdict", "CLEAN"),
-            scanned_at   = datetime.datetime.utcnow(),
-        )
-        db.session.add(record)
-        db.session.commit()
-        return record.id
+        with _flask_ctx():
+            hashes = result.get("hashes", {})
+            record = AttachmentScan(
+                email_id     = email_scan_id,
+                filename     = filename[:255],
+                file_type    = result.get("file_type",  "")[:255],
+                md5          = hashes.get("md5",   "")[:64],
+                sha256       = hashes.get("sha256","")[:64],
+                file_size    = result.get("file_size",   0),
+                entropy      = result.get("entropy",     0.0),
+                yara_matches = json.dumps(result.get("yara_matches",      [])),
+                static_finds = json.dumps(result.get("suspicious_strings",[])),
+                verdict      = result.get("verdict", "CLEAN"),
+                scanned_at   = datetime.datetime.utcnow(),
+            )
+            db.session.add(record)
+            db.session.commit()
+            return record.id
     except Exception as e:
         logger.error(f"AttachmentScan DB save error: {e}")
-        db.session.rollback()
+        try:
+            with _flask_ctx():
+                db.session.rollback()
+        except Exception:
+            pass
         return None
 
 
@@ -2219,33 +2358,39 @@ def _save_attachment_scan(result: dict,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _save_image_scan(result: dict, filename: str) -> Optional[int]:
+    """FIX: wrapped in _flask_ctx()."""
     try:
-        record = ImageAnalysisScan(
-            filename          = filename[:255],
-            file_size         = result.get("file_size",       0),
-            image_width       = result.get("image_width",     0),
-            image_height      = result.get("image_height",    0),
-            image_format      = result.get("image_format",    "")[:20],
-            ocr_text          = result.get("ocr_text",        "")[:10000],
-            ocr_word_count    = result.get("ocr_word_count",  0),
-            detected_brands   = json.dumps(result.get("detected_brands",   [])),
-            phishing_keywords = json.dumps(result.get("phishing_keywords", [])),
-            classifier_label  = result.get(
-                "classifier_result", {}
-            ).get("label", "")[:30],
-            classifier_score  = result.get(
-                "classifier_result", {}
-            ).get("score", 0.0),
-            verdict           = result.get("verdict",   "CLEAN"),
-            risk_score        = result.get("risk_score",  5.0),
-            scanned_at        = datetime.datetime.utcnow(),
-        )
-        db.session.add(record)
-        db.session.commit()
-        return record.id
+        with _flask_ctx():
+            record = ImageAnalysisScan(
+                filename          = filename[:255],
+                file_size         = result.get("file_size",       0),
+                image_width       = result.get("image_width",     0),
+                image_height      = result.get("image_height",    0),
+                image_format      = result.get("image_format",    "")[:20],
+                ocr_text          = result.get("ocr_text",        "")[:10000],
+                ocr_word_count    = result.get("ocr_word_count",  0),
+                detected_brands   = json.dumps(result.get("detected_brands",   [])),
+                phishing_keywords = json.dumps(result.get("phishing_keywords", [])),
+                classifier_label  = result.get(
+                    "classifier_result", {}
+                ).get("label", "")[:30],
+                classifier_score  = result.get(
+                    "classifier_result", {}
+                ).get("score", 0.0),
+                verdict           = result.get("verdict",    "CLEAN"),
+                risk_score        = result.get("risk_score",   5.0),
+                scanned_at        = datetime.datetime.utcnow(),
+            )
+            db.session.add(record)
+            db.session.commit()
+            return record.id
     except Exception as e:
         logger.error(f"ImageAnalysisScan DB save error: {e}")
-        db.session.rollback()
+        try:
+            with _flask_ctx():
+                db.session.rollback()
+        except Exception:
+            pass
         return None
 
 
@@ -2262,25 +2407,31 @@ def _ai_verdict_to_label(verdict: str) -> str:
 
 
 def _save_ai_detection_scan(result: dict) -> Optional[int]:
+    """FIX: wrapped in _flask_ctx()."""
     try:
-        record = AIDetectionScan(
-            input_type      = result.get("input_type",     "text"),
-            source_ref      = result.get("source_ref",     "")[:512],
-            input_preview   = result.get("input_preview",  "")[:500],
-            char_count      = result.get("char_count",     0),
-            sentence_count  = result.get("sentence_count", 0),
-            ai_probability  = result.get("ai_probability", 0.0),
-            verdict         = result.get("verdict",        "HUMAN"),
-            risk_score      = result.get("risk_score",     0.0),
-            sentence_scores = json.dumps(result.get("sentence_scores", [])),
-            scanned_at      = datetime.datetime.utcnow(),
-        )
-        db.session.add(record)
-        db.session.commit()
-        return record.id
+        with _flask_ctx():
+            record = AIDetectionScan(
+                input_type      = result.get("input_type",     "text"),
+                source_ref      = result.get("source_ref",     "")[:512],
+                input_preview   = result.get("input_preview",  "")[:500],
+                char_count      = result.get("char_count",     0),
+                sentence_count  = result.get("sentence_count", 0),
+                ai_probability  = result.get("ai_probability", 0.0),
+                verdict         = result.get("verdict",        "HUMAN"),
+                risk_score      = result.get("risk_score",     0.0),
+                sentence_scores = json.dumps(result.get("sentence_scores", [])),
+                scanned_at      = datetime.datetime.utcnow(),
+            )
+            db.session.add(record)
+            db.session.commit()
+            return record.id
     except Exception as e:
         logger.error(f"AIDetectionScan DB save error: {e}")
-        db.session.rollback()
+        try:
+            with _flask_ctx():
+                db.session.rollback()
+        except Exception:
+            pass
         return None
 
 
@@ -2327,6 +2478,7 @@ def _serialize_scan_result(r) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _save_aggregated_score(result: dict, req) -> Optional[int]:
+    """NOTE: already called inside a _flask_ctx() block in aggregate_risk()."""
     try:
         bd = result.get("breakdown", {})
         record = AggregatedRiskScore(
@@ -2369,24 +2521,24 @@ def _serialize_agg(r, full: bool = False) -> dict:
     except Exception:
         phases = []
     base = {
-        "id":              r.id,
-        "final_score":     r.final_score,
-        "verdict":         r.verdict,
-        "phases_used":     phases,
-        "email_scan_id":   r.email_scan_id,
-        "url_scan_id":     r.url_scan_id,
-        "network_scan_id": r.network_scan_id,
-        "attachment_id":   r.attachment_id,
-        "ai_detection_id": r.ai_detection_id,
-        "image_scan_id":   r.image_scan_id,
-        "email_score":     r.email_score,
-        "url_score":       r.url_score,
-        "network_score":   r.network_score,
-        "attachment_score":r.attachment_score,
-        "ai_score":        r.ai_score,
-        "image_score":     r.image_score,
-        "created_at":      r.created_at.isoformat() + "Z"
-                           if r.created_at else "",
+        "id":               r.id,
+        "final_score":      r.final_score,
+        "verdict":          r.verdict,
+        "phases_used":      phases,
+        "email_scan_id":    r.email_scan_id,
+        "url_scan_id":      r.url_scan_id,
+        "network_scan_id":  r.network_scan_id,
+        "attachment_id":    r.attachment_id,
+        "ai_detection_id":  r.ai_detection_id,
+        "image_scan_id":    r.image_scan_id,
+        "email_score":      r.email_score,
+        "url_score":        r.url_score,
+        "network_score":    r.network_score,
+        "attachment_score": r.attachment_score,
+        "ai_score":         r.ai_score,
+        "image_score":      r.image_score,
+        "created_at":       r.created_at.isoformat() + "Z"
+                            if r.created_at else "",
     }
     if full:
         try:
