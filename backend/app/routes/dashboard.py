@@ -165,12 +165,6 @@ def _all_sidebar_items():
             ],
         },
         {
-            "section": "Intelligence",
-            "items": [
-                {"label": "Threat Explain",  "url": "/threat/explain","icon": "🌐"},
-            ],
-        },
-        {
             "section": "Administration",
             "items": [
                 {"label": "Model Management","url": "/models/",       "icon": "📦"},

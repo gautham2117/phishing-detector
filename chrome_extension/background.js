@@ -1,9 +1,11 @@
 /**
  * background.js — Mahoraga Sentinel Extension Service Worker
- * KEY FIX: Popup closes mid-poll killing the interval.
- * Solution: background owns the entire scan lifecycle.
- * Popup only (1) triggers scan, (2) reads storage on open.
- * No polling in popup — storage read is instant on popup open.
+ * FIX 1: Trusted domain whitelist — skips backend scan for known-safe
+ *         domains and writes SAFE result directly to storage.
+ * FIX 2: Stores ts on every result for popup polling.
+ * FIX 3: Uses explicit Request + Headers to preserve Content-Type.
+ * FIX 4: Handles SET_AUTO_SCAN, respects autoScanEnabled (default OFF).
+ * FIX 5: Writes failed:true sentinel so popup never hangs.
  */
 
 "use strict";
@@ -14,10 +16,74 @@ var EMAIL_ENDPOINT = FASTAPI_BASE + "/api/scan/email";
 var PING_ENDPOINT  = FASTAPI_BASE + "/api/extension/status";
 var SCAN_CACHE     = {};
 var CACHE_TTL_MS   = 5 * 60 * 1000;
-var SKIP_SCHEMES   = [
+
+var SKIP_SCHEMES = [
   "chrome://", "chrome-extension://", "about:",
   "data:", "file://", "moz-extension://"
 ];
+
+// Trusted domains — never scanned, always returned as SAFE.
+// These are major platforms where a malicious score is always a false positive.
+var TRUSTED_DOMAINS = [
+  "mail.google.com",
+  "google.com",
+  "gmail.com",
+  "accounts.google.com",
+  "github.com",
+  "microsoft.com",
+  "live.com",
+  "outlook.com",
+  "office.com",
+  "office365.com",
+  "linkedin.com",
+  "apple.com",
+  "icloud.com",
+  "amazon.com",
+  "aws.amazon.com",
+  "twitter.com",
+  "x.com",
+  "facebook.com",
+  "instagram.com",
+  "youtube.com",
+  "wikipedia.org",
+  "stackoverflow.com",
+  "npmjs.com",
+  "pypi.org",
+  "cloudflare.com",
+];
+
+function isTrustedDomain(url) {
+  try {
+    var hostname = new URL(url).hostname.toLowerCase();
+    return TRUSTED_DOMAINS.some(function (d) {
+      // exact match or subdomain match (e.g. mail.google.com matches google.com)
+      return hostname === d || hostname.endsWith("." + d);
+    });
+  } catch (e) {
+    return false;
+  }
+}
+
+function makeSafeResult(url) {
+  try {
+    var hostname = new URL(url).hostname;
+  } catch (e) {
+    var hostname = url;
+  }
+  return {
+    mode:           "url",
+    url:            url,
+    risk_score:     0,
+    label:          "SAFE",
+    verdict:        "SAFE",
+    threat_summary: hostname + " is a trusted domain — scan skipped.",
+    action:         "ALLOW",
+    details:        { domain: hostname, ssl_valid: true, domain_age: null, flags: [] },
+    ts:             Date.now(),
+    failed:         false,
+    trusted:        true,
+  };
+}
 
 // ── Intercept completed navigations ──────────────────────────────────────────
 chrome.webNavigation.onCompleted.addListener(function (details) {
@@ -25,7 +91,6 @@ chrome.webNavigation.onCompleted.addListener(function (details) {
   var url = details.url || "";
   if (!url.startsWith("http")) { return; }
   if (SKIP_SCHEMES.some(function (s) { return url.startsWith(s); })) { return; }
-
   chrome.storage.local.get(["autoScanEnabled"], function (data) {
     if (data.autoScanEnabled !== true) { return; }
     scanUrl(url, details.tabId);
@@ -34,6 +99,16 @@ chrome.webNavigation.onCompleted.addListener(function (details) {
 
 // ── URL Scan ──────────────────────────────────────────────────────────────────
 function scanUrl(url, tabId) {
+  // Trusted domain — return SAFE immediately without hitting backend
+  if (isTrustedDomain(url)) {
+    var result = makeSafeResult(url);
+    SCAN_CACHE[url] = { result: result, ts: result.ts };
+    chrome.storage.local.set({ lastScan: result });
+    sendToTab(tabId, result);
+    updateBadge(tabId, "SAFE");
+    return;
+  }
+
   var now    = Date.now();
   var cached = SCAN_CACHE[url];
   if (cached && (now - cached.ts) < CACHE_TTL_MS) {
@@ -63,18 +138,15 @@ function scanUrl(url, tabId) {
     .then(function (data) {
       if (data.status !== "success") {
         console.warn("[Mahoraga Sentinel] Non-success response:", data);
-        // Write failure state so popup can show it
         chrome.storage.local.set({
           lastScan: {
-            mode: "url", url: url,
-            risk_score: 0, label: "UNKNOWN", verdict: "UNKNOWN",
-            threat_summary: "Scan returned non-success status.",
-            action: "WARN", details: {}, ts: Date.now(), failed: true,
+            mode:"url", url:url, risk_score:0, label:"UNKNOWN", verdict:"UNKNOWN",
+            threat_summary:"Scan returned non-success status.",
+            action:"WARN", details:{}, ts:Date.now(), failed:true,
           }
         });
         return;
       }
-
       var ts     = Date.now();
       var result = {
         mode:           "url",
@@ -88,24 +160,18 @@ function scanUrl(url, tabId) {
         ts:             ts,
         failed:         false,
       };
-
       SCAN_CACHE[url] = { result: result, ts: ts };
-
-      // Write to storage — popup reads this on open
       chrome.storage.local.set({ lastScan: result });
-
       sendToTab(tabId, result);
       updateBadge(tabId, result.label);
     })
     .catch(function (err) {
       console.warn("[Mahoraga Sentinel] URL scan failed:", err.message);
-      // Write failure so popup knows scan is done (failed)
       chrome.storage.local.set({
         lastScan: {
-          mode: "url", url: url,
-          risk_score: 0, label: "UNKNOWN", verdict: "UNKNOWN",
-          threat_summary: "Scan failed: " + err.message,
-          action: "WARN", details: {}, ts: Date.now(), failed: true,
+          mode:"url", url:url, risk_score:0, label:"UNKNOWN", verdict:"UNKNOWN",
+          threat_summary:"Scan failed: " + err.message,
+          action:"WARN", details:{}, ts:Date.now(), failed:true,
         }
       });
     });
@@ -131,7 +197,7 @@ function scanEmail(rawEmail, tabId, sendResponse) {
     })
     .then(function (data) {
       if (data.status !== "success") {
-        sendResponse({ ok: false, error: "Backend error" });
+        sendResponse({ ok:false, error:"Backend error" });
         return;
       }
       var ep  = (data.module_results || {}).email_parser || {};
@@ -151,21 +217,21 @@ function scanEmail(rawEmail, tabId, sendResponse) {
       };
       chrome.storage.local.set({ lastEmailScan: result });
       if (tabId) { updateBadge(tabId, result.label); }
-      sendResponse({ ok: true, result: result });
+      sendResponse({ ok:true, result:result });
     })
     .catch(function (err) {
       console.warn("[Mahoraga Sentinel] Email scan failed:", err.message);
-      sendResponse({ ok: false, error: err.message });
+      sendResponse({ ok:false, error:err.message });
     });
 }
 
 // ── Send result to content script ─────────────────────────────────────────────
 function sendToTab(tabId, result) {
   if (!tabId) { return; }
-  chrome.tabs.sendMessage(tabId, { type: "PHISHGUARD_RESULT", result: result })
+  chrome.tabs.sendMessage(tabId, { type:"PHISHGUARD_RESULT", result:result })
     .catch(function () {
       setTimeout(function () {
-        chrome.tabs.sendMessage(tabId, { type: "PHISHGUARD_RESULT", result: result })
+        chrome.tabs.sendMessage(tabId, { type:"PHISHGUARD_RESULT", result:result })
           .catch(function () {});
       }, 500);
     });
@@ -174,67 +240,39 @@ function sendToTab(tabId, result) {
 // ── Badge ─────────────────────────────────────────────────────────────────────
 function updateBadge(tabId, label) {
   var cfg = {
-    SAFE:       { text: "✓", color: "#3fb950" },
-    SUSPICIOUS: { text: "!", color: "#d29922" },
-    MALICIOUS:  { text: "✕", color: "#f85149" },
+    SAFE:       { text:"✓", color:"#3fb950" },
+    SUSPICIOUS: { text:"!", color:"#d29922" },
+    MALICIOUS:  { text:"✕", color:"#f85149" },
   };
   var c = cfg[label] || cfg.SAFE;
-  chrome.action.setBadgeText({ text: c.text, tabId: tabId });
-  chrome.action.setBadgeBackgroundColor({ color: c.color, tabId: tabId });
+  chrome.action.setBadgeText({ text:c.text, tabId:tabId });
+  chrome.action.setBadgeBackgroundColor({ color:c.color, tabId:tabId });
 }
 
 // ── Message handler ───────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
 
-  // Popup triggers scan — background does the fetch and writes storage.
-  // Popup does NOT poll. It reads storage when it reopens.
   if (msg.type === "SCAN_CURRENT_TAB") {
-    chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
-      if (!tabs || !tabs[0]) {
-        sendResponse({ ok: false, error: "No active tab." });
-        return;
-      }
-      var url   = tabs[0].url || "";
-      var tabId = tabs[0].id;
-      if (!url.startsWith("http")) {
-        sendResponse({ ok: false, error: "Cannot scan this page." });
-        return;
-      }
+    chrome.tabs.query({ active:true, currentWindow:true }, function (tabs) {
+      if (!tabs||!tabs[0]) { sendResponse({ok:false,error:"No active tab."}); return; }
+      var url=tabs[0].url||"";
+      if (!url.startsWith("http")) { sendResponse({ok:false,error:"Cannot scan this page."}); return; }
       delete SCAN_CACHE[url];
-
-      // Write a "scanning" sentinel so popup knows a scan is in flight
-      // if it reopens before the result arrives
       chrome.storage.local.set({
-        scanInFlight: { url: url, startedAt: Date.now() }
+        scanInFlight: { url:url, startedAt:Date.now() }
       });
-
-      // Respond immediately so popup can show overlay
-      sendResponse({ ok: true, status: "scanning" });
-
-      // Do the actual fetch — result written to storage when done
-      scanUrl(url, tabId);
-    });
-    return true;
-  }
-
-  // Popup polls once on open to check if an in-flight scan finished
-  if (msg.type === "GET_LAST_SCAN") {
-    chrome.storage.local.get(["lastScan", "scanInFlight"], function (data) {
-      sendResponse({
-        lastScan:    data.lastScan    || null,
-        scanInFlight: data.scanInFlight || null,
-      });
+      sendResponse({ ok:true, status:"scanning" });
+      scanUrl(url, tabs[0].id);
     });
     return true;
   }
 
   if (msg.type === "SCAN_EMAIL_CONTENT") {
-    if (!msg.raw_email || !msg.raw_email.trim()) {
-      sendResponse({ ok: false, error: "Empty email content." });
-      return true;
+    if (!msg.raw_email||!msg.raw_email.trim()) {
+      sendResponse({ok:false,error:"Empty email content."}); return true;
     }
-    chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
-      var tabId = tabs && tabs[0] ? tabs[0].id : null;
+    chrome.tabs.query({active:true,currentWindow:true},function(tabs){
+      var tabId = tabs&&tabs[0] ? tabs[0].id : null;
       scanEmail(msg.raw_email, tabId, sendResponse);
     });
     return true;
@@ -242,15 +280,15 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
 
   if (msg.type === "PING_BACKEND") {
     fetch(PING_ENDPOINT)
-      .then(function (r) { return r.json(); })
-      .then(function (d) { sendResponse({ online: d.status === "online" }); })
-      .catch(function ()  { sendResponse({ online: false }); });
+      .then(function(r){ return r.json(); })
+      .then(function(d){ sendResponse({online: d.status==="online"}); })
+      .catch(function(){ sendResponse({online:false}); });
     return true;
   }
 
   if (msg.type === "SET_AUTO_SCAN") {
     chrome.storage.local.set({ autoScanEnabled: !!msg.enabled });
-    sendResponse({ ok: true });
+    sendResponse({ok:true});
     return true;
   }
 });

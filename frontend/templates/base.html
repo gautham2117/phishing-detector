@@ -9,6 +9,9 @@
 </head>
 <body>
 
+<!-- ── Background particle canvas ──────────────────────────────────────────── -->
+<canvas id="bgCanvas"></canvas>
+
 <!-- ── Sidebar ─────────────────────────────────────────────────────────────── -->
 <aside class="sidebar" id="sidebar">
 
@@ -24,7 +27,7 @@
     <a href="/role/clear" class="sidebar-role-switch" title="Switch role">⇄</a>
   </div>
 
-  <nav class="sidebar-nav">
+  <nav class="sidebar-nav" id="sidebarNav">
     {% for section in sidebar %}
     <div class="sidebar-section-label">{{ section.section }}</div>
     {% for item in section['items'] %}
@@ -48,7 +51,7 @@
 
   <!-- Top bar -->
   <header class="topbar">
-    <button class="topbar-toggle" id="sidebarToggle" onclick="toggleSidebar()">☰</button>
+    <button class="topbar-toggle" id="sidebarToggle">☰</button>
     <div class="topbar-title">{% block page_title %}{% endblock %}</div>
     <div class="topbar-right">
       <span class="topbar-role">
@@ -64,21 +67,184 @@
 
 </main>
 
+<!-- ── Global scripts ──────────────────────────────────────────────────────── -->
 <script>
 "use strict";
-function toggleSidebar() {
+
+// ── Sidebar toggle ────────────────────────────────────────────────────────
+document.getElementById("sidebarToggle").addEventListener("click", function () {
   var sidebar = document.getElementById("sidebar");
   var main    = document.getElementById("mainContent");
   sidebar.classList.toggle("collapsed");
   main.classList.toggle("expanded");
-}
-// Highlight active link
+});
+
+// ── Active link highlight ─────────────────────────────────────────────────
 document.querySelectorAll(".sidebar-link").forEach(function (link) {
   if (link.getAttribute("href") === window.location.pathname) {
     link.classList.add("active");
   }
 });
+
+// ── Sidebar link stagger animation on load ────────────────────────────────
+(function () {
+  var links = document.querySelectorAll(".sidebar-link");
+  links.forEach(function (link, i) {
+    link.style.animationDelay = (i * 0.04) + "s";
+    link.classList.add("sidebar-link-animate");
+  });
+})();
+
+// ── Button ripple effect ──────────────────────────────────────────────────
+document.addEventListener("click", function (e) {
+  var btn = e.target.closest(".btn-primary, .btn-refresh, .pm-btn, .mm-retrain-btn, .btn");
+  if (!btn) { return; }
+
+  var ripple  = document.createElement("span");
+  var rect    = btn.getBoundingClientRect();
+  var size    = Math.max(rect.width, rect.height) * 2;
+  var x       = e.clientX - rect.left - size / 2;
+  var y       = e.clientY - rect.top  - size / 2;
+
+  ripple.className = "btn-ripple";
+  ripple.style.cssText = [
+    "width:"  + size + "px",
+    "height:" + size + "px",
+    "left:"   + x    + "px",
+    "top:"    + y    + "px",
+  ].join(";");
+
+  // Ensure button has position:relative for ripple to work
+  var pos = window.getComputedStyle(btn).position;
+  if (pos === "static") { btn.style.position = "relative"; }
+  btn.style.overflow = "hidden";
+
+  btn.appendChild(ripple);
+  ripple.addEventListener("animationend", function () {
+    ripple.remove();
+  });
+}, true);
+
+// ── Card stagger fade-up on load ──────────────────────────────────────────
+(function () {
+  var cards = document.querySelectorAll(".card, .module-card, .ov-card, .stat-box, .db-count-card");
+  cards.forEach(function (card, i) {
+    card.style.animationDelay      = (i * 0.06) + "s";
+    card.style.animationFillMode   = "both";
+    card.classList.add("card-stagger");
+  });
+})();
+
+// ── Table row slide-in ────────────────────────────────────────────────────
+(function () {
+  var rows = document.querySelectorAll(".data-table tbody tr, .feed-row, .al-card, .db-alert-item");
+  rows.forEach(function (row, i) {
+    row.style.animationDelay    = (i * 0.04) + "s";
+    row.style.animationFillMode = "both";
+    row.classList.add("row-slide-in");
+  });
+})();
+
+// ── Count-up animation for stat numbers ───────────────────────────────────
+(function () {
+  var nums = document.querySelectorAll(
+    ".ov-num, .stat-num, .lm-stat-val, .al-stat-val, .db-count-val, .arc-metric-val"
+  );
+
+  if (!("IntersectionObserver" in window)) { return; }
+
+  var observer = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (!entry.isIntersecting) { return; }
+      observer.unobserve(entry.target);
+      animateCount(entry.target);
+    });
+  }, { threshold: 0.3 });
+
+  nums.forEach(function (el) {
+    var raw = el.textContent.trim();
+    var num = parseFloat(raw.replace(/[^0-9.]/g, ""));
+    if (!isNaN(num) && num > 0) {
+      el.setAttribute("data-target", num);
+      el.setAttribute("data-suffix", raw.replace(/[0-9.]/g, ""));
+      el.textContent = "0";
+      observer.observe(el);
+    }
+  });
+
+  function animateCount(el) {
+    var target  = parseFloat(el.getAttribute("data-target"));
+    var suffix  = el.getAttribute("data-suffix") || "";
+    var isFloat = target % 1 !== 0;
+    var dur     = Math.min(1200, 400 + target * 1.5);
+    var start   = performance.now();
+
+    function step(now) {
+      var elapsed  = now - start;
+      var progress = Math.min(elapsed / dur, 1);
+      // Ease out cubic
+      var ease     = 1 - Math.pow(1 - progress, 3);
+      var current  = target * ease;
+      el.textContent = (isFloat ? current.toFixed(1) : Math.floor(current)) + suffix;
+      if (progress < 1) { requestAnimationFrame(step); }
+      else { el.textContent = (isFloat ? target.toFixed(1) : target) + suffix; }
+    }
+    requestAnimationFrame(step);
+  }
+})();
+
+// ── Verdict badge pulse on render ─────────────────────────────────────────
+(function () {
+  var badges = document.querySelectorAll(
+    ".risk-badge, .verdict-pill, .al-card, .badge-safe, .badge-suspicious, .badge-malicious"
+  );
+  badges.forEach(function (badge) {
+    badge.classList.add("badge-pulse-in");
+  });
+})();
+
 </script>
+
+<!-- ── Sliding active nav pill ──────────────────────────────────────────── -->
+<script>
+(function () {
+  var nav    = document.getElementById("sidebarNav");
+  if (!nav) { return; }
+
+  var pill   = document.createElement("div");
+  pill.className = "sidebar-nav-pill";
+  nav.insertBefore(pill, nav.firstChild);
+
+  function positionPill() {
+    var active = nav.querySelector(".sidebar-link.active");
+    if (!active) { pill.style.opacity = "0"; return; }
+    var navRect    = nav.getBoundingClientRect();
+    var linkRect   = active.getBoundingClientRect();
+    var top        = linkRect.top - navRect.top + nav.scrollTop;
+    pill.style.top     = top + "px";
+    pill.style.height  = linkRect.height + "px";
+    pill.style.opacity = "1";
+  }
+
+  // Position on load after links animate in
+  setTimeout(positionPill, 100);
+
+  // Reposition on sidebar link click
+  nav.querySelectorAll(".sidebar-link").forEach(function (link) {
+    link.addEventListener("mouseenter", function () {
+      var navRect  = nav.getBoundingClientRect();
+      var linkRect = link.getBoundingClientRect();
+      pill.style.top    = (linkRect.top - navRect.top + nav.scrollTop) + "px";
+      pill.style.height = linkRect.height + "px";
+      pill.style.opacity = "0.5";
+    });
+    link.addEventListener("mouseleave", positionPill);
+  });
+})();
+</script>
+
+<!-- Particle background -->
+<script src="/static/js/particles.js"></script>
 
 {% block scripts %}{% endblock %}
 </body>

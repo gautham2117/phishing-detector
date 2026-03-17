@@ -1971,8 +1971,11 @@ async def threat_languages():
 # Phase 1 helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _calculate_phase1_risk(parsed: dict) -> float:
+# FIND this function in backend/api/scan_router.py and replace it entirely:
+
+def _calculate_phase1_risk(parsed: dict, submitter: str = "") -> float:
     score = 0.0
+
     distilbert = parsed.get("distilbert_result", {})
     if distilbert.get("label") == "PHISHING":
         score += distilbert.get("score", 0.5) * 60
@@ -1986,13 +1989,18 @@ def _calculate_phase1_risk(parsed: dict) -> float:
     )
     score += min(anomaly_score, 30)
 
-    auth = parsed.get("auth_results", {})
-    if auth.get("spf")   in ("fail", "softfail", "none"): score += 3
-    if auth.get("dkim")  in ("fail", "none"):              score += 4
-    if auth.get("dmarc") in ("fail", "none"):              score += 3
+    # FIX: when the email is submitted from the Chrome extension, the raw_email
+    # is reconstructed from the Gmail DOM — it has no real Received/Authentication
+    # headers so SPF/DKIM/DMARC always come back as "none".
+    # Applying auth penalties in this case produces false SUSPICIOUS scores on
+    # every legitimate Gmail message. Skip auth penalties for extension submissions.
+    if submitter != "extension":
+        auth = parsed.get("auth_results", {})
+        if auth.get("spf")   in ("fail", "softfail", "none"): score += 3
+        if auth.get("dkim")  in ("fail", "none"):              score += 4
+        if auth.get("dmarc") in ("fail", "none"):              score += 3
 
     return round(min(score, 100.0), 2)
-
 
 def _build_email_explanation(parsed: dict, label: str) -> str:
     parts = []
