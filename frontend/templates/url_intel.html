@@ -19,7 +19,7 @@
     <button class="btn-primary" onclick="submitUrl()">Analyze</button>
   </div>
   <p class="hint">
-    Runs WHOIS · SSL · DNS · Geolocation · Redirect chain · BERT ML classifier.
+    Runs WHOIS · SSL · DNS · Geolocation · Redirect chain · BERT ML classifier · Subdomain enumeration.
     For demo/test URLs only — do not scan live phishing URLs without authorization.
   </p>
 </div>
@@ -67,9 +67,11 @@
       <h3>WHOIS &amp; domain age</h3>
       <table class="kv-table" id="whois-table">
         <tr><td>Registrar</td><td id="w-registrar">—</td></tr>
-        <tr><td>Created</td><td id="w-created">—</td></tr>
-        <tr><td>Expires</td><td id="w-expires">—</td></tr>
-        <tr><td>Age</td><td id="w-age">—</td></tr>
+        <tr><td>Created</td>  <td id="w-created">—</td></tr>
+        <tr><td>Expires</td>  <td id="w-expires">—</td></tr>
+        {#- FIX: domain_age_days is a top-level key in analyze_url() result,
+            not nested inside whois. Populated by url_intel.js via AJAX. -#}
+        <tr><td>Age</td>          <td id="w-age">—</td></tr>
         <tr><td>Young domain?</td><td id="w-young">—</td></tr>
       </table>
     </div>
@@ -77,26 +79,38 @@
     <!-- SSL card -->
     <div class="module-card">
       <h3>SSL / TLS certificate</h3>
+      <!--
+        FIX: _ssl_check() returns "is_valid" (not "valid").
+        The JS setBoolPill("s-valid", s.is_valid, ...) now reads the
+        correct key so "Valid?" shows the pill instead of "—".
+      -->
       <table class="kv-table" id="ssl-table">
-        <tr><td>HTTPS?</td><td id="s-https">—</td></tr>
-        <tr><td>Valid?</td><td id="s-valid">—</td></tr>
-        <tr><td>Issuer</td><td id="s-issuer">—</td></tr>
-        <tr><td>Expires</td><td id="s-expiry">—</td></tr>
+        <tr><td>HTTPS?</td>      <td id="s-https">—</td></tr>
+        <tr><td>Valid?</td>      <td id="s-valid">—</td></tr>
+        <tr><td>Issuer</td>      <td id="s-issuer">—</td></tr>
+        <tr><td>Expires</td>     <td id="s-expiry">—</td></tr>
         <tr><td>Self-signed?</td><td id="s-self">—</td></tr>
-        <tr><td>Free cert?</td><td id="s-free">—</td></tr>
+        <tr><td>Free cert?</td>  <td id="s-free">—</td></tr>
       </table>
     </div>
 
     <!-- IP / Geo card -->
     <div class="module-card">
       <h3>IP &amp; geolocation</h3>
+      <!--
+        FIX: "org" is now a separate top-level key in the analyze_url()
+        result. Previously _ip_and_geo() stored the full org string in
+        geo_data["org"] but analyze_url() only surfaced "asn", so the JS
+        g-org cell read ui.asn and showed "AS13335" for both rows.
+        Now ui.org = "AS13335 Cloudflare, Inc." and ui.asn = "AS13335".
+      -->
       <table class="kv-table">
-        <tr><td>IP address</td><td id="g-ip">—</td></tr>
-        <tr><td>Country</td><td id="g-country">—</td></tr>
-        <tr><td>City</td><td id="g-city">—</td></tr>
+        <tr><td>IP address</td>  <td id="g-ip">—</td></tr>
+        <tr><td>Country</td>     <td id="g-country">—</td></tr>
+        <tr><td>City</td>        <td id="g-city">—</td></tr>
         <tr><td>Organisation</td><td id="g-org">—</td></tr>
-        <tr><td>ASN</td><td id="g-asn">—</td></tr>
-        <tr><td>CDN/cloud?</td><td id="g-cdn">—</td></tr>
+        <tr><td>ASN</td>         <td id="g-asn">—</td></tr>
+        <tr><td>CDN/cloud?</td>  <td id="g-cdn">—</td></tr>
       </table>
     </div>
 
@@ -104,12 +118,12 @@
     <div class="module-card">
       <h3>DNS records</h3>
       <table class="kv-table">
-        <tr><td>A records</td><td id="d-a">—</td></tr>
-        <tr><td>MX records</td><td id="d-mx">—</td></tr>
-        <tr><td>NS records</td><td id="d-ns">—</td></tr>
-        <tr><td>SPF record?</td><td id="d-spf">—</td></tr>
+        <tr><td>A records</td>   <td id="d-a">—</td></tr>
+        <tr><td>MX records</td>  <td id="d-mx">—</td></tr>
+        <tr><td>NS records</td>  <td id="d-ns">—</td></tr>
+        <tr><td>SPF record?</td> <td id="d-spf">—</td></tr>
         <tr><td>DMARC record?</td><td id="d-dmarc">—</td></tr>
-        <tr><td>Free DNS?</td><td id="d-freedns">—</td></tr>
+        <tr><td>Free DNS?</td>   <td id="d-freedns">—</td></tr>
       </table>
     </div>
 
@@ -136,6 +150,49 @@
       </div>
     </div>
     <p class="model-name" id="ml-model-name">—</p>
+  </div>
+
+  <!-- ── Subdomain Enumeration card (NEW) ── -->
+  <!--
+    This card is hidden by default and shown/populated by renderSubdomains()
+    in url_intel.js after a scan completes. It is always present in the DOM
+    so the JS can reference it without needing to create elements dynamically.
+  -->
+  <div class="card" id="subdomain-card" style="display:none">
+    <h2>
+      Subdomain enumeration
+      <span class="count-badge" id="subdomain-total-badge">0 found</span>
+      <span class="count-badge subdomain-resolve-badge" id="subdomain-resolve-badge"
+            style="display:none">0 resolve</span>
+    </h2>
+    <p class="hint" id="subdomain-source-note" style="margin-bottom:12px">
+      Sources: Certificate Transparency (crt.sh) + DNS brute-force
+    </p>
+
+    <!-- Summary risk pills row -->
+    <div id="subdomain-risk-summary" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px"></div>
+
+    <!-- Subdomains table -->
+    <div style="overflow-x:auto">
+      <table class="data-table" id="subdomain-table">
+        <thead>
+          <tr>
+            <th>Subdomain</th>
+            <th>Source</th>
+            <th>IP</th>
+            <th>Resolves</th>
+            <th>SSL</th>
+            <th>ML score</th>
+            <th>Risk</th>
+            <th>Label</th>
+            <th>Flags</th>
+          </tr>
+        </thead>
+        <tbody id="subdomain-table-body">
+          <tr><td colspan="9" class="empty-state">No subdomains found</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <!-- ── Explanation card ── -->
@@ -194,7 +251,7 @@
             {{ s.final_label or '—' }}
           </span>
         </td>
-        <td>{{ s.scanned_at.strftime('%Y-%m-%d %H:%M') if s.scanned_at else '—' }}</td>
+        <td>{{ s.scanned_at.strftime('%d/%m/%Y, %H:%M:%S') if s.scanned_at else '—' }}</td>
       </tr>
       {% else %}
       <tr><td colspan="8" class="empty-state">No URL scans yet — enter a URL above</td></tr>

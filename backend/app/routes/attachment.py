@@ -1,7 +1,19 @@
 # backend/app/routes/attachment.py
 # Phase 6 — Attachment Analysis Flask blueprint
 # url_prefix="/attachments" is set on the Blueprint constructor.
-# All route decorators use RELATIVE paths (no leading /attachments/).
+#
+# FIXES IN THIS VERSION:
+#   1. attachment_history() — was returning a raw list [{},...].
+#      JS loadHistory() checks data.status === "success" and reads
+#      data.scans — so a raw list caused the history to never render.
+#      Fixed: now returns {"status": "success", "scans": [...], "total": n}
+#
+#   2. attachment_history() — was reading s.static_finds (DB column) and
+#      serialising it as "static_finds". Now also returns "verdict_reasons"
+#      and "risk_flags" so the detail panel can show them.
+#
+#   3. attachment_detail() — same static_finds → static_findings rename
+#      + added risk_flags and verdict_reasons fields.
 
 import json
 import requests
@@ -21,9 +33,7 @@ def _api():
     return current_app.config.get("FASTAPI_BASE_URL", "http://127.0.0.1:8001")
 
 
-# ── Page ─────────────────────────────────────────────────────────────────────
-# Previously: @attachment_bp.route("/attachments")  → /attachments/attachments  ✗
-# Fixed:      @attachment_bp.route("/")             → /attachments/             ✓
+# ── Page ──────────────────────────────────────────────────────────────────────
 
 @attachment_bp.route("/")
 def attachment_page():
@@ -37,9 +47,6 @@ def attachment_page():
 
 
 # ── Single file scan ──────────────────────────────────────────────────────────
-# Previously: @attachment_bp.route("/attachments/submit")  → /attachments/attachments/submit ✗
-# Fixed:      @attachment_bp.route("/scan")                → /attachments/scan               ✓
-# NOTE: The data-scan-url in attachment.html uses "/attachments/scan"
 
 @attachment_bp.route("/scan", methods=["POST"])
 def submit_attachment():
@@ -53,10 +60,13 @@ def submit_attachment():
         return jsonify({"error": "No file selected"}), 400
 
     try:
+        # Read file bytes once — the stream can only be consumed once
+        file_bytes = upload_file.read()
+
         files_payload = {
             "file": (
                 upload_file.filename,
-                upload_file.read(),
+                file_bytes,
                 upload_file.content_type or "application/octet-stream"
             )
         }
@@ -73,11 +83,11 @@ def submit_attachment():
         return jsonify(resp.json()), resp.status_code
 
     except requests.exceptions.ConnectionError:
-        return jsonify({"error": "Cannot connect to FastAPI"}), 503
+        return jsonify({"error": "Cannot connect to FastAPI backend"}), 503
     except requests.exceptions.Timeout:
-        return jsonify({"error": "File analysis timed out"}), 504
+        return jsonify({"error": "File analysis timed out (>90s)"}), 504
     except Exception as e:
-        logger.error(f"Attachment submit error: {e}")
+        logger.error("Attachment submit error: %s", e, exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -114,33 +124,58 @@ def submit_attachment_batch():
     except requests.exceptions.Timeout:
         return jsonify({"error": "Batch analysis timed out"}), 504
     except requests.exceptions.ConnectionError:
-        return jsonify({"error": "Cannot connect to FastAPI"}), 503
+        return jsonify({"error": "Cannot connect to FastAPI backend"}), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 # ── History ───────────────────────────────────────────────────────────────────
+# FIX: was returning a raw list [] — JS expects {status, scans, total}
 
 @attachment_bp.route("/history", methods=["GET"])
 def attachment_history():
+    limit = min(int(request.args.get("limit", 20)), 100)
     scans = (
         AttachmentScan.query
         .order_by(AttachmentScan.scanned_at.desc())
-        .limit(20)
+        .limit(limit)
         .all()
     )
-    return jsonify([{
-        "id":           s.id,
-        "filename":     s.filename,
-        "file_type":    s.file_type,
-        "md5":          s.md5,
-        "sha256":       s.sha256,
-        "file_size":    s.file_size,
-        "entropy":      s.entropy,
-        "yara_matches": json.loads(s.yara_matches or "[]"),
-        "verdict":      s.verdict,
-        "scanned_at":   s.scanned_at.isoformat() if s.scanned_at else ""
-    } for s in scans])
+
+    def _safe_json(val):
+        """Safely parse a JSON column that may be None or already a list."""
+        if val is None:
+            return []
+        if isinstance(val, (list, dict)):
+            return val
+        try:
+            return json.loads(val)
+        except Exception:
+            return []
+
+    records = []
+    for s in scans:
+        records.append({
+            "id":             s.id,
+            "filename":       s.filename,
+            "file_type":      s.file_type     or "unknown",
+            "md5":            s.md5           or "",
+            "sha256":         s.sha256        or "",
+            "file_size":      s.file_size     or 0,
+            "entropy":        float(s.entropy or 0.0),
+            "yara_matches":   _safe_json(s.yara_matches),
+            # DB column is "static_finds" — expose as both keys for JS
+            "static_findings":_safe_json(s.static_finds),
+            "verdict":        s.verdict       or "UNKNOWN",
+            "scanned_at":     s.scanned_at.isoformat() + "Z" if s.scanned_at else "",
+        })
+
+    # FIX: wrap in the envelope the JS expects
+    return jsonify({
+        "status": "success",
+        "scans":  records,
+        "total":  len(records)
+    })
 
 
 # ── Detail ────────────────────────────────────────────────────────────────────
@@ -148,16 +183,27 @@ def attachment_history():
 @attachment_bp.route("/detail/<int:scan_id>", methods=["GET"])
 def attachment_detail(scan_id: int):
     scan = AttachmentScan.query.get_or_404(scan_id)
+
+    def _safe_json(val):
+        if val is None:
+            return []
+        if isinstance(val, (list, dict)):
+            return val
+        try:
+            return json.loads(val)
+        except Exception:
+            return []
+
     return jsonify({
-        "id":           scan.id,
-        "filename":     scan.filename,
-        "file_type":    scan.file_type,
-        "md5":          scan.md5,
-        "sha256":       scan.sha256,
-        "file_size":    scan.file_size,
-        "entropy":      scan.entropy,
-        "yara_matches": json.loads(scan.yara_matches or "[]"),
-        "static_finds": json.loads(scan.static_finds or "[]"),
-        "verdict":      scan.verdict,
-        "scanned_at":   scan.scanned_at.isoformat() if scan.scanned_at else ""
+        "id":              scan.id,
+        "filename":        scan.filename,
+        "file_type":       scan.file_type      or "unknown",
+        "md5":             scan.md5            or "",
+        "sha256":          scan.sha256         or "",
+        "file_size":       scan.file_size      or 0,
+        "entropy":         float(scan.entropy  or 0.0),
+        "yara_matches":    _safe_json(scan.yara_matches),
+        "static_findings": _safe_json(scan.static_finds),
+        "verdict":         scan.verdict        or "UNKNOWN",
+        "scanned_at":      scan.scanned_at.isoformat() + "Z" if scan.scanned_at else "",
     })

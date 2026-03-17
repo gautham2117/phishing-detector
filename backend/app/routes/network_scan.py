@@ -1,4 +1,4 @@
-# network_scan.py
+# backend/routes/network_scan.py
 import json
 import requests
 import logging
@@ -41,17 +41,27 @@ def submit_network_scan():
     if not target:
         return jsonify({"error": "No target provided"}), 400
 
+    # --------------------------------------------------------------
+    # FIX 1: Better frontend consent handling
+    # If target is not a demo target and consent_confirmed is False,
+    # return a 400 with a clear message explaining what's needed.
+    # --------------------------------------------------------------
     if not is_demo_target(target) and not consent_confirmed:
         return jsonify({
-            "requires_consent": True,
+            "status": "consent_required",
             "message": (
-                f"'{target}' is not a pre-authorized demo target. "
-                "Port scanning without authorization is illegal. "
-                "Only proceed if you own this domain or have written permission."
+                f"'{target}' is not a pre‑authorized demo target. "
+                "Port scanning without authorization is illegal.\n\n"
+                "To proceed, you must:\n"
+                "1. Set SCAN_AUTHORIZED=1 in your .env file\n"
+                "2. Check the consent checkbox in the UI\n\n"
+                "Only continue if you own this domain or have "
+                "explicit written permission."
             )
-        }), 403
+        }), 400  # Using 400 so frontend can distinguish from real errors
 
     try:
+        # Forward the request to FastAPI
         resp = requests.post(
             f"{_api()}/api/scan/network",
             json={
@@ -64,6 +74,25 @@ def submit_network_scan():
             timeout={"quick": 30, "top100": 60,
                      "top1000": 120, "full": 700}.get(scan_type, 60)
         )
+
+        # --------------------------------------------------------------
+        # FIX 2: Better error forwarding
+        # If FastAPI returns a 403 with a clear message, preserve it
+        # --------------------------------------------------------------
+        if resp.status_code == 403:
+            try:
+                error_data = resp.json()
+                return jsonify({
+                    "status": "blocked",
+                    "message": error_data.get("detail", error_data.get("error", 
+                                "Scan blocked by ethics gate. Check SCAN_AUTHORIZED env var."))
+                }), 403
+            except:
+                return jsonify({
+                    "status": "blocked",
+                    "message": "Scan blocked by ethics gate. Check SCAN_AUTHORIZED env var."
+                }), 403
+
         return jsonify(resp.json()), resp.status_code
 
     except requests.exceptions.Timeout:
@@ -71,6 +100,7 @@ def submit_network_scan():
     except requests.exceptions.ConnectionError:
         return jsonify({"error": "Cannot connect to FastAPI"}), 503
     except Exception as e:
+        logger.error(f"Network scan proxy error: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -125,3 +155,13 @@ def network_detail(scan_id: int):
             "cpe":             p.cpe
         } for p in ports]
     })
+
+@network_scan_bp.route("/network/is-demo", methods=["GET"])
+def check_is_demo():
+    """Check if a target is on the demo allowlist (for UI consent logic)"""
+    target = request.args.get("target", "").strip()
+    if not target:
+        return jsonify({"error": "No target provided"}), 400
+    
+    is_demo = is_demo_target(target)
+    return jsonify({"is_demo": is_demo, "target": target})

@@ -145,17 +145,10 @@ def _register_blueprints(app: Flask) -> None:
             "Phase 10"
         ),
         (
-            "backend.app.routes.live_monitor",
-            "live_monitor_bp",
-            "/monitor",
-            "Live Monitor",
-            "Phase 11"
-        ),
-        (
             "backend.app.routes.model_mgmt",
             "model_mgmt_bp",
             "/models",
-            "Model Management",
+            "Model _Management",
             "Phase 12"
         ),
         (

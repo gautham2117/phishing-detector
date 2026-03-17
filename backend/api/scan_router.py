@@ -47,9 +47,6 @@ from backend.modules.platform_monitor   import (
     get_due_targets, get_unified_feed
 )
 from backend.modules.risk_engine        import aggregate_risk_scores
-from backend.modules.realtime_monitor   import (
-    get_live_feed, get_live_stats, get_alerts_above_threshold
-)
 from backend.modules.model_manager      import (
     add_feedback_label, get_feedback_queue,
     get_model_versions, get_training_state,
@@ -1299,51 +1296,6 @@ async def risk_detail(record_id: int):
         raise
     except Exception as e:
         return JSONResponse(status_code=500, content=error_response(str(e)))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 11 — Live Monitor
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.get("/monitor/feed", summary="Live unified feed",
-            tags=["Live Monitor"])
-async def monitor_feed(limit: int = 100):
-    try:
-        with _flask_ctx():
-            feed = get_live_feed(limit=limit)
-        return {"status": "success", "feed": feed, "total": len(feed)}
-    except Exception as e:
-        return JSONResponse(status_code=500, content=error_response(str(e)))
-
-
-@router.get("/monitor/stats", summary="Scan statistics",
-            tags=["Live Monitor"])
-async def monitor_stats():
-    try:
-        with _flask_ctx():
-            stats = get_live_stats()
-        return {"status": "success", "stats": stats}
-    except Exception as e:
-        return JSONResponse(status_code=500, content=error_response(str(e)))
-
-
-@router.get("/monitor/alerts", summary="Scans above threshold",
-            tags=["Live Monitor"])
-async def monitor_alerts(threshold: float = 70.0, limit: int = 20):
-    try:
-        with _flask_ctx():
-            alerts = get_alerts_above_threshold(
-                threshold=threshold, limit=limit
-            )
-        return {
-            "status":    "success",
-            "alerts":    alerts,
-            "threshold": threshold,
-            "count":     len(alerts),
-        }
-    except Exception as e:
-        return JSONResponse(status_code=500, content=error_response(str(e)))
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 12 — Model Management

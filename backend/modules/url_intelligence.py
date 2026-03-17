@@ -1,139 +1,222 @@
 # url_intelligence.py
 # URL & Domain Intelligence Module — Phase 2
 #
-# For every URL extracted from an email this module runs:
-#   1.  Normalization & unshortening   — resolve the real destination
-#   2.  WHOIS lookup                   — owner, registrar, age
-#   3.  DNS analysis                   — A / MX / TXT / NS records
-#   4.  SSL/TLS certificate check      — issuer, expiry, self-signed?
-#   5.  IP resolution + geolocation    — country, ASN via ipinfo.io or local
-#   6.  ML classification              — elftsdmr/malware-url-detect BERT
+# FIXES IN THIS VERSION:
+#   1. _safe_date() — handles list[datetime], naive datetimes, strings
+#   2. _whois_lookup() — _safe_date() for all date fields
+#   3. _compute_domain_age() — timezone-safe, no dateutil dependency
+#   4. _ssl_check() — returns "is_valid" key consistently (never "valid")
+#   5. _classify_url_with_bert() — score inversion fixed for BENIGN labels
+#   6. _aggregate_flags() — references ssl["is_valid"] (not ssl["valid"])
+#   7. analyze_url() return dict — "org" field added at top level
+#      (was missing; g-org in JS was falling back to asn showing same value)
+#   8. _ip_and_geo() — org now returned separately from asn
 #
-# All six layers run concurrently via ThreadPoolExecutor so a batch
-# of 10 URLs takes ~5 s instead of ~50 s.
-#
-# The function you call from outside this module:
-#     result = analyze_url(raw_url)
-# and to analyze a whole list:
-#     results = analyze_url_batch(url_list)
-
+# NEW IN THIS VERSION:
+#   9. _enumerate_subdomains() — dual-method subdomain discovery:
+#        Method A: Certificate Transparency via crt.sh API (passive)
+#        Method B: DNS brute-force against curated 100-entry wordlist (active)
+#      Each confirmed resolving subdomain is passed through analyze_url()
+#      with _skip_subdomains=True for individual risk scoring.
+#      Results stored under "subdomains" key in analyze_url() return dict.
+#      analyze_url() now accepts _skip_subdomains=True to prevent recursion.
+ 
 import ssl
 import json
 import socket
 import logging
-import hashlib
 import requests
 import datetime
 import ipaddress
 import concurrent.futures
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 from typing import Optional
-
-import whois          # pip install python-whois
-import dns.resolver   # pip install dnspython
-
+ 
+import whois
+import dns.resolver
+ 
 from backend.ml.model_loader import get_model
-
+ 
 logger = logging.getLogger(__name__)
-
+ 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
-
-# Max time (seconds) per network call — keeps a single bad domain from
-# stalling the entire batch.
+ 
 NETWORK_TIMEOUT = 8
-
-# Domains we skip WHOIS + DNS on (they'd always pass and waste time)
+ 
 SKIP_DOMAINS = {"localhost", "127.0.0.1", "0.0.0.0", "example.com"}
-
-# Known URL shortener domains — we follow these to find the real URL
+ 
 URL_SHORTENERS = {
     "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly",
     "is.gd", "buff.ly", "adf.ly", "bc.vc", "clck.ru",
     "rb.gy", "cutt.ly", "shorturl.at", "tiny.cc"
 }
-
-# Suspicious TLDs scored higher by the rule engine (Phase 4)
+ 
 SUSPICIOUS_TLDS = {
     ".xyz", ".tk", ".top", ".club", ".gq", ".ml", ".ga",
     ".cf", ".pw", ".work", ".loan", ".click", ".link",
     ".buzz", ".monster", ".rest", ".icu", ".cyou"
 }
-
-# New gTLDs / ccTLDs commonly abused for phishing — flag domains under 180 days
+ 
 YOUNG_DOMAIN_THRESHOLD_DAYS = 180
-
-# Max redirect hops to follow before flagging as redirect chain obfuscation
 MAX_REDIRECT_HOPS = 5
-
-
+ 
+# Subdomain brute-force wordlist — common prefixes in real infra + phishing kits
+SUBDOMAIN_WORDLIST = [
+    "www", "mail", "smtp", "pop", "imap", "webmail", "email",
+    "ftp", "sftp", "ssh", "vpn", "remote", "gateway",
+    "api", "api2", "api-v2", "rest", "graphql",
+    "app", "apps", "web", "portal", "admin", "administrator",
+    "login", "signin", "auth", "sso", "oauth",
+    "secure", "ssl", "tls", "cdn", "static", "assets",
+    "img", "images", "media", "files", "upload", "uploads",
+    "dev", "staging", "stage", "test", "qa", "uat", "sandbox",
+    "beta", "alpha", "preview", "demo",
+    "shop", "store", "pay", "payment", "checkout", "billing",
+    "account", "accounts", "user", "users", "member", "members",
+    "help", "support", "helpdesk", "tickets", "docs", "wiki",
+    "blog", "news", "press", "forum", "community",
+    "dashboard", "panel", "cpanel", "whm", "plesk",
+    "monitor", "status", "health",
+    "mx", "mx1", "mx2", "ns", "ns1", "ns2", "dns",
+    "mobile", "m", "wap",
+    "old", "legacy", "backup", "archive",
+    "internal", "intranet", "corp", "office",
+    "git", "gitlab", "github", "svn", "jenkins", "ci", "cd",
+    "db", "database", "mysql", "postgres", "redis", "mongo",
+    "search", "elastic", "kibana", "grafana", "prometheus",
+    "s3", "bucket", "storage", "backup2",
+    "webdisk", "autodiscover", "autoconfig",
+    "track", "tracking", "pixel", "analytics", "stats",
+]
+ 
+# Cap: only risk-score this many resolving subdomains to avoid runaway latency
+MAX_SUBDOMAIN_RISK_SCORE = 20
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# Safe date coercion helper
+# whois.creation_date / expiration_date may return list[datetime], a single
+# datetime, a string, or None.
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def _safe_date(raw) -> Optional[datetime.datetime]:
+    """Coerce a raw whois date to a timezone-naive datetime, or None."""
+    if raw is None:
+        return None
+ 
+    # List — take the earliest valid datetime
+    if isinstance(raw, list):
+        valid = [d for d in raw if isinstance(d, datetime.datetime)]
+        if not valid:
+            for item in raw:
+                result = _safe_date(item)
+                if result:
+                    return result
+            return None
+        return min(valid).replace(tzinfo=None)
+ 
+    # Already a datetime — strip timezone
+    if isinstance(raw, datetime.datetime):
+        return raw.replace(tzinfo=None)
+ 
+    # String — try common formats
+    if isinstance(raw, str):
+        raw = raw.strip()
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d",
+            "%d-%b-%Y",
+        ):
+            try:
+                return datetime.datetime.strptime(raw, fmt)
+            except ValueError:
+                continue
+    return None
+ 
+ 
 # ─────────────────────────────────────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
-
-def analyze_url(raw_url: str) -> dict:
+ 
+def analyze_url(raw_url: str, _skip_subdomains: bool = False) -> dict:
     """
     Run the full six-layer intelligence stack on a single URL.
-
-    Args:
-        raw_url: Any URL string (http/https). May be a shortener.
-
-    Returns:
-        A dict with keys matching the URLIntelResult schema:
-          raw_url, final_url, domain, ip, country, asn,
-          whois, dns, ssl, redirects,
-          domain_age_days, domain_age_flag,
-          ml_result, flags, risk_contribution, analyzed_at
+ 
+    _skip_subdomains=True is set internally when analyze_url() is called
+    recursively for subdomain risk-scoring, preventing infinite recursion.
+ 
+    Returns a flat dict with keys:
+        raw_url, final_url, domain,
+        ip, country, city, org, asn,
+        whois, dns, ssl,
+        redirect_chain, redirect_count,
+        domain_age_days, domain_age_flag,
+        ml_result, flags, risk_contribution,
+        subdomains, analyzed_at
     """
     raw_url = raw_url.strip()
-
-    # ── Step 1: Normalize & unshorten ────────────────────────────────────
+ 
     normalization = _normalize_and_unshorten(raw_url)
-    final_url  = normalization["final_url"]
-    redirects  = normalization["redirect_chain"]
-
-    # Parse the final (resolved) URL for domain extraction
+    final_url = normalization["final_url"]
+    redirects = normalization["redirect_chain"]
+ 
     parsed = urlparse(final_url)
     domain = parsed.netloc.lower().lstrip("www.")
-    # Remove port if present (e.g., "example.com:8080" → "example.com")
     domain = domain.split(":")[0]
-
+ 
     if domain in SKIP_DOMAINS or not domain:
         return _minimal_result(raw_url, "skipped_domain")
-
-    # ── Steps 2–5 run concurrently in a thread pool ────────────────────
-    # Each step is independent and involves network I/O (WHOIS, DNS, SSL).
-    # Running them in parallel cuts total wall-clock time by ~4x.
+ 
     whois_data = {}
     dns_data   = {}
     ssl_data   = {}
     geo_data   = {}
-
+ 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         future_whois = executor.submit(_whois_lookup, domain)
         future_dns   = executor.submit(_dns_lookup, domain)
         future_ssl   = executor.submit(_ssl_check, domain, parsed.port)
         future_geo   = executor.submit(_ip_and_geo, domain)
-
-        # Collect results — each wrapped in try/except inside its function,
-        # so a failure in one doesn't cancel the others.
-        whois_data = future_whois.result()
-        dns_data   = future_dns.result()
-        ssl_data   = future_ssl.result()
-        geo_data   = future_geo.result()
-
-    # ── Step 6: ML classification (elftsdmr/malware-url-detect) ──────────
+ 
+        try:
+            whois_data = future_whois.result(timeout=15)
+        except Exception as e:
+            logger.warning("WHOIS future failed for %s: %s", domain, e)
+            whois_data = {"error": str(e)}
+ 
+        try:
+            dns_data = future_dns.result(timeout=15)
+        except Exception as e:
+            logger.warning("DNS future failed for %s: %s", domain, e)
+            dns_data = {"error": str(e)}
+ 
+        try:
+            ssl_data = future_ssl.result(timeout=15)
+        except Exception as e:
+            logger.warning("SSL future failed for %s: %s", domain, e)
+            ssl_data = {"has_ssl": False, "is_valid": False, "error": str(e)}
+ 
+        try:
+            geo_data = future_geo.result(timeout=15)
+        except Exception as e:
+            logger.warning("Geo future failed for %s: %s", domain, e)
+            geo_data = {
+                "ip": "", "country": "", "city": "",
+                "org": "", "asn": "", "error": str(e)
+            }
+ 
     ml_result = _classify_url_with_bert(final_url)
-
-    # ── Compute domain age ────────────────────────────────────────────────
+ 
     domain_age_days = _compute_domain_age(whois_data)
     domain_age_flag = (
         domain_age_days is not None and
         domain_age_days < YOUNG_DOMAIN_THRESHOLD_DAYS
     )
-
-    # ── Aggregate flags from all layers ───────────────────────────────────
+ 
     flags = _aggregate_flags(
         raw_url=raw_url,
         final_url=final_url,
@@ -144,304 +227,211 @@ def analyze_url(raw_url: str) -> dict:
         domain_age_days=domain_age_days,
         ml_result=ml_result
     )
-
-    # ── Compute this URL's contribution to the overall risk score ─────────
-    # The Risk Engine (Phase 10) will use this as the "url_intel" component.
-    # Maximum contribution: 15 points (as defined in the project spec).
+ 
     risk_contribution = _compute_risk_contribution(flags, ml_result, domain_age_flag)
-
+ 
+    # Subdomain enumeration — only on top-level calls, not recursive ones
+    subdomains = []
+    if not _skip_subdomains:
+        try:
+            subdomains = _enumerate_subdomains(domain)
+        except Exception as e:
+            logger.warning("Subdomain enumeration failed for %s: %s", domain, e)
+ 
     return {
-        "raw_url":            raw_url,
-        "final_url":          final_url,
-        "domain":             domain,
-        "ip":                 geo_data.get("ip", ""),
-        "country":            geo_data.get("country", ""),
-        "city":               geo_data.get("city", ""),
-        "asn":                geo_data.get("asn", ""),
-        "whois":              whois_data,
-        "dns":                dns_data,
-        "ssl":                ssl_data,
-        "redirect_chain":     redirects,
-        "redirect_count":     len(redirects),
-        "domain_age_days":    domain_age_days,
-        "domain_age_flag":    domain_age_flag,
-        "ml_result":          ml_result,
-        "flags":              flags,
-        "risk_contribution":  risk_contribution,
-        "analyzed_at":        datetime.datetime.utcnow().isoformat() + "Z"
+        "raw_url":           raw_url,
+        "final_url":         final_url,
+        "domain":            domain,
+        "ip":                geo_data.get("ip",      ""),
+        "country":           geo_data.get("country", ""),
+        "city":              geo_data.get("city",     ""),
+        # FIX: org is now a separate top-level key.
+        # Previously _ip_and_geo only returned "org" inside geo_data but
+        # analyze_url() never surfaced it — the JS g-org cell was reading
+        # ui.asn as a fallback, showing "AS13335" instead of "Cloudflare, Inc."
+        "org":               geo_data.get("org",      ""),
+        "asn":               geo_data.get("asn",      ""),
+        "whois":             whois_data,
+        "dns":               dns_data,
+        "ssl":               ssl_data,
+        "redirect_chain":    redirects,
+        "redirect_count":    len(redirects),
+        "domain_age_days":   domain_age_days,
+        "domain_age_flag":   domain_age_flag,
+        "ml_result":         ml_result,
+        "flags":             flags,
+        "risk_contribution": risk_contribution,
+        "subdomains":        subdomains,
+        "analyzed_at":       datetime.datetime.utcnow().isoformat() + "Z"
     }
-
-
-def analyze_url_batch(url_list: list[dict]) -> list[dict]:
-    """
-    Analyze a list of URL dicts (as produced by the email parser).
-    Each dict must have at least a "raw" key with the URL string.
-
-    Runs each URL's full six-layer analysis concurrently.
-    Returns a list of URLIntelResult dicts in the same order as input.
-
-    Args:
-        url_list: List of dicts from email_parser's _extract_urls()
-                  [{"raw": "https://...", "domain": "...", ...}, ...]
-
-    Returns:
-        List of full intelligence result dicts.
-    """
+ 
+ 
+def analyze_url_batch(url_list: list) -> list:
+    """Analyze a list of URL dicts (each with a 'raw' key)."""
     if not url_list:
         return []
-
+ 
     raw_urls = [u.get("raw", "") for u in url_list]
-
-    # Cap concurrent URL analyses to avoid overwhelming DNS/WHOIS servers
     max_concurrent = min(len(raw_urls), 5)
-
-    results = []
+ 
+    ordered = [None] * len(raw_urls)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrent) as executor:
-        # Submit all URLs at once — results come back as futures
         futures = {
             executor.submit(analyze_url, url): i
             for i, url in enumerate(raw_urls) if url
         }
-
-        # Collect in submission order (not completion order)
-        ordered = [None] * len(raw_urls)
         for future, idx in futures.items():
             try:
                 ordered[idx] = future.result(timeout=30)
             except concurrent.futures.TimeoutError:
                 ordered[idx] = _minimal_result(raw_urls[idx], "analysis_timeout")
             except Exception as e:
-                logger.error(f"URL analysis error for {raw_urls[idx]}: {e}")
+                logger.error("URL analysis error for %s: %s", raw_urls[idx], e)
                 ordered[idx] = _minimal_result(raw_urls[idx], str(e))
-
-        results = [r for r in ordered if r is not None]
-
-    return results
-
-
+ 
+    return [r for r in ordered if r is not None]
+ 
+ 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 1 — Normalize & Unshorten
 # ─────────────────────────────────────────────────────────────────────────────
-
+ 
 def _normalize_and_unshorten(url: str) -> dict:
-    """
-    Normalize the URL and follow any redirect chain.
-
-    Normalization:
-      - Strip whitespace, trailing punctuation
-      - Lowercase the scheme and domain
-      - Decode %XX percent-encoding in path/query
-
-    Unshortening:
-      - Follow up to MAX_REDIRECT_HOPS redirects using HEAD requests
-      - Record every intermediate hop in redirect_chain
-      - Flag chains longer than 2 hops as obfuscation signal
-
-    Returns:
-        {
-          "final_url": str,        # URL after all redirects
-          "redirect_chain": list,  # list of intermediate URLs
-          "error": str or None
-        }
-    """
     url = url.strip().rstrip(".,;!?)'\"")
     redirect_chain = []
-    current_url    = url
-
+ 
     try:
-        parsed = urlparse(url)
-        domain = parsed.netloc.lstrip("www.").split(":")[0].lower()
-        is_shortener = domain in URL_SHORTENERS
-
-        if not is_shortener:
-            # For non-shorteners, still follow any server-side redirects
-            # (some phishing pages use redirects even on "normal" domains)
-            pass
-
-        # Follow redirects — use HEAD to avoid downloading page bodies
         session = requests.Session()
         session.max_redirects = MAX_REDIRECT_HOPS
-
+ 
         try:
             response = session.head(
-                current_url,
+                url,
                 allow_redirects=True,
                 timeout=NETWORK_TIMEOUT,
                 headers={"User-Agent": "Mozilla/5.0 (PhishingDetector/1.0)"}
             )
-
-            # response.history contains all intermediate responses
             for hop in response.history:
-                if hop.headers.get("Location"):
-                    redirect_chain.append(hop.headers["Location"])
-
+                loc = hop.headers.get("Location", "")
+                if loc:
+                    redirect_chain.append(loc)
             final_url = response.url
-
         except requests.exceptions.TooManyRedirects:
-            # Flag this — more than MAX_REDIRECT_HOPS is a red flag
-            final_url = current_url
+            final_url = url
             redirect_chain.append(f"[ERROR: exceeded {MAX_REDIRECT_HOPS} redirect hops]")
-
         except requests.exceptions.RequestException:
-            # Can't reach the URL — still analyze the domain
-            final_url = current_url
-
+            final_url = url
+ 
         return {
             "final_url":      final_url,
             "redirect_chain": redirect_chain,
             "error":          None
         }
-
+ 
     except Exception as e:
-        logger.warning(f"Normalization error for {url}: {e}")
+        logger.warning("Normalization error for %s: %s", url, e)
         return {
             "final_url":      url,
             "redirect_chain": [],
             "error":          str(e)
         }
-
-
+ 
+ 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 2 — WHOIS Lookup
 # ─────────────────────────────────────────────────────────────────────────────
-
+ 
 def _whois_lookup(domain: str) -> dict:
-    """
-    Query WHOIS for domain registration information.
-
-    Returns:
-        {
-          "registrar":     str,
-          "creation_date": str (ISO format),
-          "expiry_date":   str (ISO format),
-          "updated_date":  str (ISO format),
-          "name_servers":  list[str],
-          "status":        list[str],
-          "org":           str,
-          "country":       str,
-          "error":         str or None
-        }
-
-    WHOIS lookups can be slow (1–3 s) and sometimes fail for newer TLDs.
-    We always return a dict — never raise — so callers get partial data.
-    """
     result = {
-        "registrar": "", "creation_date": "", "expiry_date": "",
-        "updated_date": "", "name_servers": [], "status": [],
-        "org": "", "country": "", "error": None
+        "registrar":     "",
+        "creation_date": "",
+        "expiry_date":   "",
+        "updated_date":  "",
+        "name_servers":  [],
+        "status":        [],
+        "org":           "",
+        "country":       "",
+        "error":         None
     }
-
+ 
     try:
         w = whois.whois(domain)
-
+ 
         result["registrar"] = str(w.registrar or "")
-        result["org"]       = str(w.org or "")
-        result["country"]   = str(w.country or "")
-
-        # whois returns dates as datetime objects or lists of datetimes
-        def _fmt_date(d) -> str:
-            if not d:
-                return ""
-            if isinstance(d, list):
-                d = d[0]  # take the earliest date if multiple returned
-            if isinstance(d, datetime.datetime):
-                return d.isoformat()
-            return str(d)
-
-        result["creation_date"] = _fmt_date(w.creation_date)
-        result["expiry_date"]   = _fmt_date(w.expiry_date)
-        result["updated_date"]  = _fmt_date(w.updated_date)
-
-        # Name servers — normalize to lowercase list
+        result["org"]       = str(w.org       or "")
+        result["country"]   = str(w.country   or "")
+ 
+        def _fmt(raw) -> str:
+            dt = _safe_date(raw)
+            return dt.isoformat() if dt else ""
+ 
+        result["creation_date"] = _fmt(w.creation_date)
+        expiry_raw = getattr(w, "expiration_date", None) or getattr(w, "expiry_date", None)
+        result["expiry_date"]   = _fmt(expiry_raw)
+        result["updated_date"]  = _fmt(w.updated_date)
+ 
         ns = w.name_servers
         if ns:
             if isinstance(ns, str):
                 ns = [ns]
             result["name_servers"] = [s.lower() for s in ns if s]
-
-        # Status — can be a string or list
+ 
         status = w.status
         if status:
             if isinstance(status, str):
                 status = [status]
             result["status"] = status
-
+ 
     except Exception as e:
-        # Common failures: WHOIS rate limit, private registration,
-        # unsupported TLD, no WHOIS server found
         result["error"] = str(e)
-        logger.debug(f"WHOIS lookup failed for {domain}: {e}")
-
+        logger.debug("WHOIS lookup failed for %s: %s", domain, e)
+ 
     return result
-
-
+ 
+ 
 def _compute_domain_age(whois_data: dict) -> Optional[int]:
-    """
-    Calculate the domain's age in days from its creation_date.
-    Returns None if creation_date is unavailable.
-    """
+    """Return domain age in days, or None if creation date unavailable."""
     creation_str = whois_data.get("creation_date", "")
     if not creation_str:
         return None
-
+ 
     try:
-        # Handle multiple possible date formats
-        from dateutil import parser as dateutil_parser
-        creation_dt = dateutil_parser.parse(creation_str)
-
-        # Make timezone-naive for comparison
-        if creation_dt.tzinfo:
-            creation_dt = creation_dt.replace(tzinfo=None)
-
+        creation_dt = _safe_date(creation_str)
+        if creation_dt is None:
+            return None
+        creation_dt = creation_dt.replace(tzinfo=None)
         age = (datetime.datetime.utcnow() - creation_dt).days
         return max(age, 0)
-
-    except Exception:
+    except Exception as e:
+        logger.debug("Domain age calculation failed: %s", e)
         return None
-
-
+ 
+ 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 3 — DNS Analysis
 # ─────────────────────────────────────────────────────────────────────────────
-
+ 
 def _dns_lookup(domain: str) -> dict:
-    """
-    Query DNS for A, MX, TXT, and NS records.
-
-    Why each record matters for phishing detection:
-      A   → IP the domain resolves to (cross-ref with geolocation)
-      MX  → Phishing domains often have no MX (no real email server)
-      TXT → Contains SPF policy — we check if it's permissive
-      NS  → Name server provider (e.g. Cloudflare vs cheap registrars)
-
-    Returns:
-        {
-          "a_records":   [{"address": str}, ...],
-          "mx_records":  [{"host": str, "preference": int}, ...],
-          "txt_records": [str, ...],
-          "ns_records":  [str, ...],
-          "has_mx":      bool,
-          "spf_policy":  str,    # extracted from TXT, e.g. "v=spf1 +all"
-          "error":       str or None
-        }
-    """
     result = {
-        "a_records": [], "mx_records": [], "txt_records": [],
-        "ns_records": [], "has_mx": False, "spf_policy": "", "error": None
+        "a_records":   [],
+        "mx_records":  [],
+        "txt_records": [],
+        "ns_records":  [],
+        "has_mx":      False,
+        "spf_policy":  "",
+        "error":       None
     }
-
+ 
     resolver = dns.resolver.Resolver()
     resolver.timeout  = NETWORK_TIMEOUT
     resolver.lifetime = NETWORK_TIMEOUT
-
-    # ── A records ──────────────────────────────────────────────────────────
+ 
     try:
         answers = resolver.resolve(domain, "A")
         result["a_records"] = [{"address": str(r)} for r in answers]
     except Exception as e:
-        logger.debug(f"DNS A lookup failed for {domain}: {e}")
-
-    # ── MX records ─────────────────────────────────────────────────────────
+        logger.debug("DNS A lookup failed for %s: %s", domain, e)
+ 
     try:
         answers = resolver.resolve(domain, "MX")
         result["mx_records"] = [
@@ -449,186 +439,154 @@ def _dns_lookup(domain: str) -> dict:
             for r in answers
         ]
         result["has_mx"] = len(result["mx_records"]) > 0
-    except Exception as e:
-        logger.debug(f"DNS MX lookup failed for {domain}: {e}")
+    except Exception:
         result["has_mx"] = False
-
-    # ── TXT records ────────────────────────────────────────────────────────
+ 
     try:
         answers = resolver.resolve(domain, "TXT")
         for record in answers:
-            # TXT records are returned as byte strings — decode each part
-            txt_str = " ".join(part.decode("utf-8", errors="replace")
-                               for part in record.strings)
+            txt_str = " ".join(
+                part.decode("utf-8", errors="replace") for part in record.strings
+            )
             result["txt_records"].append(txt_str)
-
-            # Extract SPF policy from TXT records
             if txt_str.startswith("v=spf1"):
                 result["spf_policy"] = txt_str
     except Exception as e:
-        logger.debug(f"DNS TXT lookup failed for {domain}: {e}")
-
-    # ── NS records ─────────────────────────────────────────────────────────
+        logger.debug("DNS TXT lookup failed for %s: %s", domain, e)
+ 
     try:
         answers = resolver.resolve(domain, "NS")
         result["ns_records"] = [str(r) for r in answers]
     except Exception as e:
-        logger.debug(f"DNS NS lookup failed for {domain}: {e}")
-
+        logger.debug("DNS NS lookup failed for %s: %s", domain, e)
+ 
     return result
-
-
+ 
+ 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 4 — SSL/TLS Certificate Validation
+# Step 4 — SSL/TLS Certificate
 # ─────────────────────────────────────────────────────────────────────────────
-
+ 
 def _ssl_check(domain: str, port: Optional[int] = None) -> dict:
     """
-    Connect to the domain over SSL and inspect its certificate.
-
-    Checks:
-      - Whether a valid certificate exists (no SSL = big red flag for login pages)
-      - Certificate issuer (Let's Encrypt is fine; self-signed is suspicious)
-      - Certificate expiry date (expired cert = abandoned or malicious site)
-      - Whether the cert's CN/SANs match the domain (name mismatch = suspicious)
-
-    We use Python's built-in ssl module — no third-party library needed.
-
-    Returns:
-        {
-          "has_ssl":       bool,
-          "is_valid":      bool,   # cert is trusted and not expired
-          "issuer":        str,
-          "subject":       str,
-          "expires":       str (ISO date),
-          "days_to_expiry":int,
-          "is_expired":    bool,
-          "is_self_signed":bool,
-          "san_mismatch":  bool,
-          "error":         str or None
-        }
+    Always returns 'is_valid' key (never 'valid').
+    All callers — _aggregate_flags, scan_router._save_url_scan,
+    extension_scan — use ssl.get('is_valid').
     """
     result = {
-        "has_ssl": False, "is_valid": False, "issuer": "", "subject": "",
-        "expires": "", "days_to_expiry": 0, "is_expired": False,
-        "is_self_signed": False, "san_mismatch": False, "error": None
+        "has_ssl":        False,
+        "is_valid":       False,   # KEY IS ALWAYS "is_valid"
+        "issuer":         "",
+        "subject":        "",
+        "expires":        "",
+        "days_to_expiry": 0,
+        "is_expired":     False,
+        "is_self_signed": False,
+        "san_mismatch":   False,
+        "error":          None
     }
-
+ 
     connect_port = port or 443
-
+ 
     try:
-        # Create an SSL context that validates certificates
         ctx = ssl.create_default_context()
-
-        # Connect and retrieve the certificate
+ 
         with ctx.wrap_socket(
             socket.create_connection((domain, connect_port), timeout=NETWORK_TIMEOUT),
             server_hostname=domain
         ) as ssock:
             cert = ssock.getpeercert()
-            result["has_ssl"] = True
-            result["is_valid"] = True   # If we got here, cert is trusted
-
-            # ── Issuer ─────────────────────────────────────────────────────
+            result["has_ssl"]  = True
+            result["is_valid"] = True
+ 
             issuer_dict = dict(x[0] for x in cert.get("issuer", []))
             result["issuer"] = issuer_dict.get("organizationName", "Unknown")
-
-            # ── Subject ────────────────────────────────────────────────────
+ 
             subject_dict = dict(x[0] for x in cert.get("subject", []))
             result["subject"] = subject_dict.get("commonName", "")
-
-            # ── Expiry date ────────────────────────────────────────────────
-            # cert["notAfter"] format: "Jan 01 00:00:00 2025 GMT"
+ 
             expiry_str = cert.get("notAfter", "")
             if expiry_str:
-                expiry_dt = datetime.datetime.strptime(expiry_str, "%b %d %H:%M:%S %Y %Z")
-                result["expires"]       = expiry_dt.isoformat()
-                days_left               = (expiry_dt - datetime.datetime.utcnow()).days
-                result["days_to_expiry"]= days_left
-                result["is_expired"]    = days_left < 0
-
-            # ── Self-signed detection ─────────────────────────────────────
-            # A cert is self-signed if issuer == subject
+                expiry_dt = datetime.datetime.strptime(
+                    expiry_str, "%b %d %H:%M:%S %Y %Z"
+                )
+                result["expires"]        = expiry_dt.isoformat()
+                days_left                = (expiry_dt - datetime.datetime.utcnow()).days
+                result["days_to_expiry"] = days_left
+                result["is_expired"]     = days_left < 0
+                if days_left < 0:
+                    result["is_valid"] = False
+ 
             issuer_cn  = issuer_dict.get("commonName", "")
             subject_cn = subject_dict.get("commonName", "")
-            result["is_self_signed"] = (issuer_cn == subject_cn and bool(issuer_cn))
-
-            # ── SAN mismatch ──────────────────────────────────────────────
-            # Check that the domain appears in the cert's Subject Alt Names
+            result["is_self_signed"] = bool(issuer_cn and issuer_cn == subject_cn)
+            if result["is_self_signed"]:
+                result["is_valid"] = False
+ 
             sans = [
                 name for kind, name in cert.get("subjectAltName", [])
                 if kind == "DNS"
             ]
             if sans:
-                # Match with wildcard support (*.example.com matches sub.example.com)
                 matched = any(
                     domain == san or
                     (san.startswith("*.") and domain.endswith(san[1:]))
                     for san in sans
                 )
                 result["san_mismatch"] = not matched
-
+                if result["san_mismatch"]:
+                    result["is_valid"] = False
+ 
     except ssl.SSLCertVerificationError as e:
-        # Certificate is present but invalid (expired, untrusted CA, etc.)
         result["has_ssl"]  = True
         result["is_valid"] = False
         result["error"]    = f"SSL cert verification failed: {e}"
-
+ 
     except (socket.timeout, ConnectionRefusedError, OSError) as e:
-        # No SSL at all — site doesn't serve HTTPS
-        result["has_ssl"] = False
-        result["error"]   = str(e)
-
+        result["has_ssl"]  = False
+        result["is_valid"] = False
+        result["error"]    = str(e)
+ 
     except Exception as e:
-        result["error"] = str(e)
-        logger.debug(f"SSL check error for {domain}: {e}")
-
+        result["is_valid"] = False
+        result["error"]    = str(e)
+        logger.debug("SSL check error for %s: %s", domain, e)
+ 
     return result
-
-
+ 
+ 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 5 — IP Resolution & Geolocation
 # ─────────────────────────────────────────────────────────────────────────────
-
+ 
 def _ip_and_geo(domain: str) -> dict:
-    """
-    Resolve the domain to an IP address and look up its geolocation.
-
-    Geolocation strategy (no paid API required):
-      1. Try ipinfo.io free tier (50k lookups/month — enough for dev/hackathon)
-      2. Fallback: return just the IP with no geo data
-
-    Returns:
-        {
-          "ip":       str,
-          "country":  str,    # "IN", "US", etc.
-          "city":     str,
-          "region":   str,
-          "org":      str,    # ASN + org name
-          "asn":      str,    # e.g. "AS13335"
-          "is_private":bool,  # RFC 1918 / loopback address
-          "error":    str or None
-        }
-    """
     result = {
-        "ip": "", "country": "", "city": "", "region": "",
-        "org": "", "asn": "", "is_private": False, "error": None
+        "ip":         "",
+        "country":    "",
+        "city":       "",
+        "region":     "",
+        # FIX: org and asn are now separate fields.
+        # org  = full string  e.g. "AS13335 Cloudflare, Inc."
+        # asn  = prefix only  e.g. "AS13335"
+        # Previously only asn was in the result dict so the JS Organisation
+        # row was displaying the raw ASN string instead of the company name.
+        "org":        "",
+        "asn":        "",
+        "is_private": False,
+        "error":      None
     }
-
+ 
     try:
-        # Resolve domain → IP
         ip_str = socket.gethostbyname(domain)
         result["ip"] = ip_str
-
-        # Check if private/loopback
+ 
         ip_obj = ipaddress.ip_address(ip_str)
         result["is_private"] = ip_obj.is_private or ip_obj.is_loopback
-
+ 
         if result["is_private"]:
             result["country"] = "PRIVATE"
             return result
-
-        # Geolocation via ipinfo.io (free, no key needed for basic info)
+ 
         try:
             geo_resp = requests.get(
                 f"https://ipinfo.io/{ip_str}/json",
@@ -638,95 +596,339 @@ def _ip_and_geo(domain: str) -> dict:
             if geo_resp.status_code == 200:
                 geo = geo_resp.json()
                 result["country"] = geo.get("country", "")
-                result["city"]    = geo.get("city", "")
-                result["region"]  = geo.get("region", "")
-                result["org"]     = geo.get("org", "")
-
-                # Extract ASN from org field (format: "AS13335 Cloudflare, Inc.")
-                org = result["org"]
-                if org.startswith("AS"):
-                    result["asn"] = org.split(" ")[0]
-
+                result["city"]    = geo.get("city",    "")
+                result["region"]  = geo.get("region",  "")
+ 
+                org_raw = geo.get("org", "")
+                # org = full human-readable string for display
+                result["org"] = org_raw
+                # asn = just the ASN number prefix
+                if org_raw.startswith("AS"):
+                    result["asn"] = org_raw.split(" ")[0]
+                else:
+                    result["asn"] = ""
+ 
         except requests.exceptions.RequestException:
-            # ipinfo.io unreachable — skip geo, keep IP
             pass
-
+ 
     except socket.gaierror as e:
-        # Domain doesn't resolve at all (DNS failure or non-existent domain)
         result["error"] = f"DNS resolution failed: {e}"
     except Exception as e:
         result["error"] = str(e)
-        logger.debug(f"IP/geo lookup error for {domain}: {e}")
-
+        logger.debug("IP/geo lookup error for %s: %s", domain, e)
+ 
     return result
-
-
+ 
+ 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 6 — ML Classification (elftsdmr/malware-url-detect)
+# Step 6 — ML Classification
 # ─────────────────────────────────────────────────────────────────────────────
-
+ 
 def _classify_url_with_bert(url: str) -> dict:
     """
-    Classify the (final, unshortened) URL as MALICIOUS or BENIGN using
-    the elftsdmr/malware-url-detect BERT model.
-
-    The model was fine-tuned on malicious URL datasets and treats the
-    raw URL string as a text sequence — it learns lexical patterns like
-    long subdomains, suspicious keywords, and unusual character distributions.
-
-    Args:
-        url: The final URL (after following redirects).
-
-    Returns:
-        {"label": "MALICIOUS"/"BENIGN"/"UNKNOWN", "score": float, "model": str}
+    Score inversion fix for BENIGN labels:
+        MALICIOUS label → phishing_score = raw_score        (direct)
+        BENIGN label    → phishing_score = 1.0 - raw_score  (inverted)
+ 
+    Root cause of the github.com MALICIOUS bug:
+        Model returned label=BENIGN, raw_score=0.97 (97% benign confidence).
+        Old code returned phishing_score=0.97 regardless of label direction.
+        Correct value is 1.0 - 0.97 = 0.03 (3% phishing probability).
     """
     fallback = {
-        "label": "UNKNOWN", "score": 0.0,
+        "label": "UNKNOWN",
+        "score": 0.0,
         "model": "elftsdmr/malware-url-detect",
         "note":  "model_unavailable"
     }
-
+ 
     if not url or len(url) < 4:
         return {**fallback, "note": "url_too_short"}
-
+ 
     model = get_model("url_malware_detector")
     if model is None:
         logger.warning("url_malware_detector not loaded — returning fallback")
         return fallback
-
+ 
     try:
-        # Truncate to 512 chars — BERT tokenizer limit
         truncated = url[:512]
-
-        results = model(truncated)
-        top = results[0]
-
+        results   = model(truncated)
+        top       = results[0]
+ 
         raw_label = top["label"].upper()
-
-        # Normalize label strings — the model uses LABEL_0/LABEL_1 or
-        # MALICIOUS/BENIGN depending on the tokenizer config
-        if any(x in raw_label for x in ["MALICIOUS", "MALWARE", "BAD", "1"]):
-            normalized = "MALICIOUS"
-        elif any(x in raw_label for x in ["BENIGN", "SAFE", "CLEAN", "GOOD", "0"]):
-            normalized = "BENIGN"
+        raw_score = float(top["score"])
+ 
+        if any(x in raw_label for x in ["MALICIOUS", "MALWARE", "BAD", "LABEL_1", "1"]):
+            normalized     = "MALICIOUS"
+            phishing_score = raw_score           # direct
+        elif any(x in raw_label for x in ["BENIGN", "SAFE", "CLEAN", "GOOD", "LABEL_0", "0"]):
+            normalized     = "BENIGN"
+            phishing_score = 1.0 - raw_score     # inverted
         else:
-            normalized = raw_label
-
+            normalized     = raw_label
+            phishing_score = raw_score
+ 
         return {
-            "label": normalized,
-            "score": round(float(top["score"]), 4),
-            "model": "elftsdmr/malware-url-detect"
+            "label":     normalized,
+            "score":     round(phishing_score, 4),
+            "model":     "elftsdmr/malware-url-detect",
+            "raw_label": raw_label,
+            "raw_score": round(raw_score, 4),
         }
-
+ 
     except Exception as e:
-        logger.error(f"URL BERT classify error: {e}")
+        logger.error("URL BERT classify error: %s", e)
         return fallback
-
-
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 7 — Subdomain Enumeration  (NEW)
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def _enumerate_subdomains(domain: str) -> list:
+    """
+    Discover subdomains via two parallel methods then risk-score each one.
+ 
+    Method A — crt.sh (Certificate Transparency):
+        Passive lookup — no DNS queries sent, just reads public CT logs.
+        Catches subdomains that were ever in a TLS certificate.
+ 
+    Method B — DNS brute-force:
+        Active lookup — resolves each entry in SUBDOMAIN_WORDLIST.
+        Catches internal/dev subdomains that may not appear in CT logs.
+ 
+    Risk scoring:
+        Each resolving subdomain is passed through analyze_url() with
+        _skip_subdomains=True (prevents infinite recursion).
+        Capped at MAX_SUBDOMAIN_RISK_SCORE entries to bound latency.
+ 
+    Returns list of dicts:
+        {
+          subdomain:  str,          full name e.g. "mail.github.com"
+          source:     str,          "crtsh" | "bruteforce" | "both"
+          ip:         str,          resolved IP or ""
+          resolves:   bool,
+          risk_score: float | None, 0-100
+          label:      str   | None, "SAFE" | "SUSPICIOUS" | "MALICIOUS"
+          ml_score:   float | None, raw ML phishing probability
+          ssl_valid:  bool  | None,
+          flags:      list[str],    flag names from analyze_url
+        }
+    """
+    # Run both discovery methods in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        f_crtsh      = ex.submit(_crtsh_lookup,     domain)
+        f_bruteforce = ex.submit(_dns_bruteforce,   domain)
+ 
+        try:
+            crtsh_found      = f_crtsh.result(timeout=20)
+        except Exception as e:
+            logger.warning("crt.sh lookup failed for %s: %s", domain, e)
+            crtsh_found      = []
+ 
+        try:
+            bruteforce_found = f_bruteforce.result(timeout=25)
+        except Exception as e:
+            logger.warning("DNS bruteforce failed for %s: %s", domain, e)
+            bruteforce_found = []
+ 
+    # Merge and deduplicate, tracking which method found each subdomain
+    all_found: dict = {}   # subdomain -> source string
+    for sd in crtsh_found:
+        all_found[sd] = "crtsh"
+    for sd in bruteforce_found:
+        if sd in all_found:
+            all_found[sd] = "both"
+        else:
+            all_found[sd] = "bruteforce"
+ 
+    # Drop the apex domain itself and anything that isn't a subdomain of it
+    all_found = {
+        sd: src for sd, src in all_found.items()
+        if sd != domain and sd.endswith(f".{domain}")
+    }
+ 
+    if not all_found:
+        return []
+ 
+    # Quick DNS resolve pass — split into resolved / unresolved
+    resolved:   list = []
+    unresolved: list = []
+ 
+    for sd in sorted(all_found.keys()):
+        ip = _resolve_subdomain(sd)
+        entry = {
+            "subdomain":  sd,
+            "source":     all_found[sd],
+            "ip":         ip or "",
+            "resolves":   ip is not None,
+            "risk_score": None,
+            "label":      None,
+            "ml_score":   None,
+            "ssl_valid":  None,
+            "flags":      [],
+        }
+        if ip is not None:
+            resolved.append(entry)
+        else:
+            unresolved.append(entry)
+ 
+    # Risk-score resolved subdomains (capped)
+    to_score = resolved[:MAX_SUBDOMAIN_RISK_SCORE]
+    no_score = resolved[MAX_SUBDOMAIN_RISK_SCORE:]
+ 
+    if to_score:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+            future_map = {
+                ex.submit(_score_subdomain, entry["subdomain"]): i
+                for i, entry in enumerate(to_score)
+            }
+            for future in concurrent.futures.as_completed(future_map, timeout=60):
+                idx = future_map[future]
+                try:
+                    scored = future.result()
+                    to_score[idx].update(scored)
+                except Exception as e:
+                    logger.debug(
+                        "Subdomain risk score failed for %s: %s",
+                        to_score[idx]["subdomain"], e
+                    )
+ 
+    # Return order: scored resolving → unscored resolving → non-resolving
+    return to_score + no_score + unresolved
+ 
+ 
+def _crtsh_lookup(domain: str) -> list:
+    """
+    Query crt.sh Certificate Transparency API for known subdomains.
+    Returns a sorted list of unique subdomain strings.
+    """
+    try:
+        resp = requests.get(
+            "https://crt.sh/",
+            params={"q": f"%.{domain}", "output": "json"},
+            timeout=12,
+            headers={"Accept": "application/json"}
+        )
+        if resp.status_code != 200:
+            logger.debug("crt.sh returned %s for %s", resp.status_code, domain)
+            return []
+ 
+        entries = resp.json()
+        found = set()
+        for entry in entries:
+            name_value = entry.get("name_value", "")
+            # name_value may contain newlines with multiple names per cert
+            for name in name_value.splitlines():
+                name = name.strip().lower()
+                # Strip wildcard prefix (*.example.com → example.com)
+                if name.startswith("*."):
+                    name = name[2:]
+                if name.endswith(f".{domain}") and name != domain:
+                    found.add(name)
+ 
+        logger.info("crt.sh found %d subdomains for %s", len(found), domain)
+        return sorted(found)
+ 
+    except requests.exceptions.RequestException as e:
+        logger.warning("crt.sh request failed for %s: %s", domain, e)
+        return []
+    except (ValueError, KeyError) as e:
+        logger.warning("crt.sh JSON parse error for %s: %s", domain, e)
+        return []
+ 
+ 
+def _dns_bruteforce(domain: str) -> list:
+    """
+    Resolve each prefix in SUBDOMAIN_WORDLIST against the target domain.
+    Returns a list of subdomains that produce a successful A-record response.
+    Uses a thread pool with short per-query timeouts for speed.
+    """
+    resolver = dns.resolver.Resolver()
+    resolver.timeout  = 2
+    resolver.lifetime = 2
+ 
+    def _try(prefix: str) -> Optional[str]:
+        candidate = f"{prefix}.{domain}"
+        try:
+            resolver.resolve(candidate, "A")
+            return candidate
+        except Exception:
+            return None
+ 
+    found = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=30) as ex:
+        futures = {ex.submit(_try, prefix): prefix for prefix in SUBDOMAIN_WORDLIST}
+        for future in concurrent.futures.as_completed(futures, timeout=20):
+            try:
+                result = future.result()
+                if result:
+                    found.append(result)
+            except Exception:
+                pass
+ 
+    logger.info("DNS bruteforce found %d subdomains for %s", len(found), domain)
+    return found
+ 
+ 
+def _resolve_subdomain(subdomain: str) -> Optional[str]:
+    """Quick A-record lookup. Returns first IP string or None on failure."""
+    try:
+        return socket.gethostbyname(subdomain)
+    except socket.gaierror:
+        return None
+ 
+ 
+def _score_subdomain(subdomain: str) -> dict:
+    """
+    Call analyze_url() on https://<subdomain> with _skip_subdomains=True.
+    Derives risk_score (0-100) and label from the result.
+    Returns a partial dict suitable for merging into a subdomain entry.
+    """
+    try:
+        result = analyze_url(f"https://{subdomain}", _skip_subdomains=True)
+ 
+        ml_score     = float(result.get("ml_result", {}).get("score", 0.0))
+        base_score   = round(ml_score * 100, 2)
+        flags        = result.get("flags", [])
+        flag_penalty = min(sum(
+            8.0 if f.get("severity") == "high"   else
+            4.0 if f.get("severity") == "medium" else
+            1.0
+            for f in flags
+        ), 20.0)
+        age_penalty  = 5.0 if result.get("domain_age_flag") else 0.0
+        risk_score   = min(round(base_score + flag_penalty + age_penalty, 2), 100.0)
+ 
+        label = (
+            "MALICIOUS"  if risk_score >= 70 else
+            "SUSPICIOUS" if risk_score >= 30 else
+            "SAFE"
+        )
+ 
+        return {
+            "risk_score": risk_score,
+            "label":      label,
+            "ml_score":   round(ml_score, 4),
+            "ssl_valid":  result.get("ssl", {}).get("is_valid", False),
+            "flags":      [f.get("flag", "") for f in flags[:5]],
+        }
+ 
+    except Exception as e:
+        logger.debug("_score_subdomain error for %s: %s", subdomain, e)
+        return {
+            "risk_score": None,
+            "label":      None,
+            "ml_score":   None,
+            "ssl_valid":  None,
+            "flags":      [],
+        }
+ 
+ 
 # ─────────────────────────────────────────────────────────────────────────────
 # Flag aggregation
 # ─────────────────────────────────────────────────────────────────────────────
-
+ 
 def _aggregate_flags(
     raw_url: str,
     final_url: str,
@@ -736,124 +938,120 @@ def _aggregate_flags(
     ssl_data: dict,
     domain_age_days: Optional[int],
     ml_result: dict
-) -> list[dict]:
-    """
-    Collect all intelligence signals into a uniform list of flag dicts.
-    Each flag has:
-      {"flag": str, "description": str, "severity": "low"/"medium"/"high"}
-
-    These flags feed directly into:
-      - The Risk Scoring Engine (Phase 10)
-      - The Detection Rules Engine (Phase 4, which adds more rule flags)
-      - The dashboard URL Intelligence page (rendered as cards)
-    """
+) -> list:
     flags = []
-
+ 
     def add(flag: str, desc: str, severity: str):
         flags.append({"flag": flag, "description": desc, "severity": severity})
-
-    # ── URL structure flags ───────────────────────────────────────────────
+ 
     if len(raw_url) > 75:
         add("long_url", f"URL length {len(raw_url)} chars (> 75)", "medium")
-
-    # IP address used directly instead of domain name
+ 
     import re
     if re.match(r'https?://(\d{1,3}\.){3}\d{1,3}', raw_url):
         add("ip_address_url", "URL uses raw IP address instead of domain", "high")
-
-    # Suspicious TLD
+ 
     tld = "." + domain.split(".")[-1] if "." in domain else ""
     if tld in SUSPICIOUS_TLDS:
-        add("suspicious_tld", f"TLD '{tld}' is commonly used in throwaway phishing domains", "high")
-
-    # Too many subdomains (e.g. login.verify.paypal.attacker.com)
-    subdomain_depth = len(domain.split(".")) - 2   # subtract SLD + TLD
+        add("suspicious_tld",
+            f"TLD '{tld}' is commonly used in throwaway phishing domains", "high")
+ 
+    subdomain_depth = len(domain.split(".")) - 2
     if subdomain_depth > 2:
-        add("deep_subdomains", f"{subdomain_depth} subdomain levels (suspicious if ≥ 3)", "medium")
-
-    # Redirect chain longer than 2 hops
+        add("deep_subdomains",
+            f"{subdomain_depth} subdomain levels (suspicious if ≥ 3)", "medium")
+ 
     if len(redirects) > 2:
         add("long_redirect_chain",
             f"URL redirected {len(redirects)} times before final destination",
             "high" if len(redirects) > 3 else "medium")
-
-    # ── WHOIS / domain age flags ──────────────────────────────────────────
+ 
     if domain_age_days is not None and domain_age_days < YOUNG_DOMAIN_THRESHOLD_DAYS:
         add("young_domain",
-            f"Domain is only {domain_age_days} days old (< {YOUNG_DOMAIN_THRESHOLD_DAYS} days)",
+            f"Domain is only {domain_age_days} days old "
+            f"(< {YOUNG_DOMAIN_THRESHOLD_DAYS} days)",
             "high" if domain_age_days < 30 else "medium")
-
+ 
     if not whois_data.get("registrar"):
-        add("no_whois", "WHOIS returned no registrar — domain may use private registration", "low")
-
-    # ── SSL flags ─────────────────────────────────────────────────────────
+        add("no_whois",
+            "WHOIS returned no registrar — domain may use private registration",
+            "low")
+ 
     if not ssl_data.get("has_ssl"):
-        add("no_https", "Domain does not serve HTTPS — unsafe for any login form", "medium")
-
+        add("no_https",
+            "Domain does not serve HTTPS — unsafe for any login form", "medium")
+ 
     if ssl_data.get("is_expired"):
         add("expired_cert", "SSL certificate has expired", "high")
-
+ 
     if ssl_data.get("is_self_signed"):
-        add("self_signed_cert", "SSL certificate is self-signed (not issued by trusted CA)", "high")
-
+        add("self_signed_cert",
+            "SSL certificate is self-signed (not issued by trusted CA)", "high")
+ 
     if ssl_data.get("san_mismatch"):
-        add("ssl_san_mismatch", "SSL certificate does not cover this domain", "high")
-
-    # ── ML flag ───────────────────────────────────────────────────────────
+        add("ssl_san_mismatch",
+            "SSL certificate does not cover this domain", "high")
+ 
     if ml_result.get("label") == "MALICIOUS" and ml_result.get("score", 0) > 0.6:
         add("ml_malicious",
-            f"BERT model classified URL as malicious ({int(ml_result['score']*100)}% confidence)",
+            f"BERT model classified URL as malicious "
+            f"({int(ml_result['score'] * 100)}% confidence)",
             "high" if ml_result["score"] > 0.85 else "medium")
-
+ 
     return flags
-
-
+ 
+ 
 # ─────────────────────────────────────────────────────────────────────────────
-# Risk contribution calculation
+# Risk contribution
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _compute_risk_contribution(flags: list, ml_result: dict, domain_age_flag: bool) -> float:
-    """
-    Calculate this URL's contribution to the overall email risk score.
-    Maximum: 15 points (as defined in the project spec for Module 2).
-
-    Breakdown:
-      - ML classification:    0–7  points
-      - Flag severity:        0–5  points
-      - Domain age:           0–3  points
-    """
+ 
+def _compute_risk_contribution(
+    flags: list,
+    ml_result: dict,
+    domain_age_flag: bool
+) -> float:
     score = 0.0
-
-    # ML contribution (0–7)
+ 
     if ml_result.get("label") == "MALICIOUS":
         score += ml_result.get("score", 0.5) * 7
-
-    # Flag severity contribution (0–5)
+ 
     severity_weights = {"high": 2.0, "medium": 1.0, "low": 0.3}
-    flag_score = sum(severity_weights.get(f.get("severity", "low"), 0.3) for f in flags)
+    flag_score = sum(
+        severity_weights.get(f.get("severity", "low"), 0.3) for f in flags
+    )
     score += min(flag_score, 5.0)
-
-    # Domain age contribution (0–3)
+ 
     if domain_age_flag:
         score += 3.0
-
+ 
     return round(min(score, 15.0), 2)
-
-
+ 
+ 
 # ─────────────────────────────────────────────────────────────────────────────
 # Utility
 # ─────────────────────────────────────────────────────────────────────────────
-
+ 
 def _minimal_result(url: str, reason: str) -> dict:
-    """Return a minimal result dict when analysis is skipped or fails."""
     return {
-        "raw_url": url, "final_url": url, "domain": "",
-        "ip": "", "country": "", "city": "", "asn": "",
-        "whois": {}, "dns": {}, "ssl": {},
-        "redirect_chain": [], "redirect_count": 0,
-        "domain_age_days": None, "domain_age_flag": False,
-        "ml_result": {"label": "UNKNOWN", "score": 0.0, "model": ""},
-        "flags": [], "risk_contribution": 0.0,
-        "analyzed_at": datetime.datetime.utcnow().isoformat() + "Z",
-        "skipped_reason": reason
+        "raw_url":           url,
+        "final_url":         url,
+        "domain":            "",
+        "ip":                "",
+        "country":           "",
+        "city":              "",
+        "org":               "",
+        "asn":               "",
+        "whois":             {},
+        "dns":               {},
+        "ssl":               {"has_ssl": False, "is_valid": False},
+        "redirect_chain":    [],
+        "redirect_count":    0,
+        "domain_age_days":   None,
+        "domain_age_flag":   False,
+        "ml_result":         {"label": "UNKNOWN", "score": 0.0, "model": ""},
+        "flags":             [],
+        "risk_contribution": 0.0,
+        "subdomains":        [],
+        "analyzed_at":       datetime.datetime.utcnow().isoformat() + "Z",
+        "skipped_reason":    reason
     }

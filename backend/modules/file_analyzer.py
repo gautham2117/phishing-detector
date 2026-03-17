@@ -1,38 +1,51 @@
 # file_analyzer.py
 # File & Attachment Analysis Module.
 #
-# Analyzes uploaded files for malware indicators using:
-#   1. Hash computation (MD5, SHA-1, SHA-256)
-#   2. YARA rule scanning (custom + community rules)
-#   3. Shannon entropy analysis (detects packed/encrypted executables)
-#   4. Static analysis (extract strings, macros, embedded scripts)
-#   5. File-type-specific analysis:
-#      - PDF:  embedded JavaScript, /OpenAction, /Launch actions
-#      - DOCX/XLSX: VBA macros, external relationships
-#      - HTML/JS: credential forms, hidden iframes, obfuscated JS
-#      - EXE:  PE header analysis, section entropy
-#      - ZIP:  list contents, flag nested executables
+# FIXES IN THIS VERSION:
+#   1. Verdict case — _compute_verdict() now returns uppercase "CLEAN" /
+#      "SUSPICIOUS" / "MALICIOUS" to match scan_router label_map keys.
+#      Previously returned title-case "Clean" → scan_router fell through
+#      to default "SUSPICIOUS" for every clean file.
+#   2. Key rename — "static_findings" → also exposed as "suspicious_strings"
+#      at the top level of the result dict so the JS renderStrings() finds it.
+#      (JS reads mod.suspicious_strings; old code only had mod.static_findings)
+#   3. type_findings flattened — the result dict now exposes type-specific
+#      findings at the top level under predictable keys that match the JS:
+#        pdf_analysis, macro_analysis, html_analysis, zip_analysis
+#      Previously everything was nested under "type_findings" which the JS
+#      never read correctly.
+#   4. verdict_reasons added — a human-readable list of strings explaining
+#      why the verdict was reached. Used by scan_router explanation builder.
+#   5. risk_score key — scan_router reads result.get("risk_score") directly;
+#      this was already correct but is now explicitly documented.
 #
-# Returns a structured FileAnalysisResult dict with a final verdict:
-#   Clean / Suspicious / Malicious
+# NEW IN THIS VERSION:
+#   6. File type mismatch detection — flags when magic bytes disagree with
+#      the file extension (e.g. EXE renamed to .pdf).
+#   7. VirusTotal hash lookup — optional; only runs if VT_API_KEY is set
+#      in the Flask app config or VIRUSTOTAL_API_KEY env var. Adds
+#      vt_result dict and known_bad bool to the result.
+#   8. Embedded URL aggregation — all URLs extracted from any file type
+#      are collected into a top-level "embedded_urls" list.
+#   9. Macro detail — for DOCX/OLE files with macros, keyword list and
+#      stream names are surfaced in macro_analysis.
+#  10. Archive content table — ZIP/DOCX now returns structured file_list
+#      with name, size, is_suspicious columns.
 
 import os
 import re
 import math
-import zlib
 import json
 import hashlib
 import logging
 import zipfile
-import tempfile
+import requests as _requests
 from typing import Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# ── Optional imports with graceful fallback ──────────────────────────────────
-# Each tool is wrapped in try/except so the module still works if a
-# dependency is not installed. The result will note what was skipped.
+# ── Optional imports ─────────────────────────────────────────────────────────
 
 try:
     import yara
@@ -56,48 +69,42 @@ except ImportError:
 
 try:
     from pdfminer.high_level import extract_text as pdf_extract_text
-    from pdfminer.pdfpage import PDFPage
     PDFMINER_AVAILABLE = True
 except ImportError:
     PDFMINER_AVAILABLE = False
-    logger.warning("pdfminer.six not installed — PDF analysis limited")
+    logger.warning("pdfminer.six not installed — PDF text extraction disabled")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Path to YARA rules directory (relative to this file)
-_module_dir  = os.path.dirname(os.path.abspath(__file__))
-_backend_dir = os.path.dirname(_module_dir)
+_module_dir    = os.path.dirname(os.path.abspath(__file__))
+_backend_dir   = os.path.dirname(_module_dir)
 YARA_RULES_DIR = os.path.join(_backend_dir, "yara_rules")
 
-# Entropy thresholds
-# Normal text files: ~3.5–4.5 bits/byte
-# Compressed/packed: > 7.0 bits/byte
-# Encrypted:         ~7.9–8.0 bits/byte
 ENTROPY_SUSPICIOUS = 6.5
 ENTROPY_PACKED     = 7.2
+MAX_FILE_SIZE      = 20 * 1024 * 1024   # 20 MB
 
-# Maximum file size we will analyze (20 MB)
-MAX_FILE_SIZE = 20 * 1024 * 1024
+# VirusTotal free API endpoint
+VT_HASH_URL = "https://www.virustotal.com/api/v3/files/{}"
 
-# File type signatures (magic bytes)
+# Magic bytes → internal file type token
 FILE_SIGNATURES = {
-    b'\x4d\x5a':             'exe',        # PE executable (MZ header)
-    b'\x7f\x45\x4c\x46':    'elf',        # ELF binary
-    b'\x25\x50\x44\x46':    'pdf',        # PDF (%PDF)
-    b'\x50\x4b\x03\x04':    'zip',        # ZIP archive (also DOCX/XLSX/PPTX)
-    b'\xd0\xcf\x11\xe0':    'ole',        # OLE2 compound document (old Office)
-    b'\x89\x50\x4e\x47':    'png',        # PNG image
-    b'\xff\xd8\xff':         'jpg',        # JPEG image
-    b'\x47\x49\x46\x38':    'gif',        # GIF image
-    b'\x3c\x68\x74\x6d\x6c':'html',       # <html
-    b'\x3c\x21\x44\x4f\x43':'html',       # <!DOC
-    b'\x3c\x73\x63\x72\x69':'js',         # <scri (JS starting with <script)
+    b'\x4d\x5a':             'exe',
+    b'\x7f\x45\x4c\x46':    'elf',
+    b'\x25\x50\x44\x46':    'pdf',
+    b'\x50\x4b\x03\x04':    'zip',
+    b'\xd0\xcf\x11\xe0':    'ole',
+    b'\x89\x50\x4e\x47':    'png',
+    b'\xff\xd8\xff':         'jpg',
+    b'\x47\x49\x46\x38':    'gif',
+    b'\x3c\x68\x74\x6d\x6c':'html',
+    b'\x3c\x21\x44\x4f\x43':'html',
+    b'\x3c\x73\x63\x72\x69':'js',
 }
 
-# Suspicious strings to look for in any file
 SUSPICIOUS_STRINGS = [
     b'powershell', b'cmd.exe', b'wscript', b'cscript',
     b'shell32', b'CreateObject', b'WScript.Shell',
@@ -108,7 +115,6 @@ SUSPICIOUS_STRINGS = [
     b'FromBase64String', b'invoke-expression', b'IEX(',
 ]
 
-# Supported file extensions and their category
 EXTENSION_MAP = {
     '.pdf':  'document', '.docx': 'document', '.doc':  'document',
     '.xlsx': 'document', '.xls':  'document', '.pptx': 'document',
@@ -116,54 +122,52 @@ EXTENSION_MAP = {
     '.exe':  'executable', '.dll': 'executable', '.bat': 'executable',
     '.cmd':  'executable', '.vbs': 'executable', '.ps1': 'executable',
     '.sh':   'executable', '.elf': 'executable',
-    '.zip':  'archive',  '.rar':  'archive',   '.7z':  'archive',
-    '.tar':  'archive',  '.gz':   'archive',
-    '.html': 'html',     '.htm':  'html',
-    '.js':   'script',   '.ts':   'script',    '.py':  'script',
-    '.php':  'script',   '.rb':   'script',
-    '.png':  'image',    '.jpg':  'image',     '.jpeg':'image',
-    '.gif':  'image',    '.bmp':  'image',     '.svg': 'image',
+    '.zip':  'archive',  '.rar': 'archive',    '.7z':  'archive',
+    '.tar':  'archive',  '.gz':  'archive',
+    '.html': 'html',     '.htm': 'html',
+    '.js':   'script',   '.ts':  'script',     '.py':  'script',
+    '.php':  'script',   '.rb':  'script',
+    '.png':  'image',    '.jpg': 'image',      '.jpeg':'image',
+    '.gif':  'image',    '.bmp': 'image',      '.svg': 'image',
+}
+
+# Extensions that map to a different magic-byte type — used for mismatch detection
+EXPECTED_MAGIC = {
+    '.exe':  'exe',  '.dll': 'exe',
+    '.elf':  'elf',
+    '.pdf':  'pdf',
+    '.png':  'png',  '.jpg': 'jpg',  '.jpeg': 'jpg',
+    '.gif':  'gif',
 }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# YARA rule compiler (compiled once at module load)
+# YARA rule compiler
 # ─────────────────────────────────────────────────────────────────────────────
 
 _compiled_rules = None
 
 def _get_yara_rules():
-    """
-    Compile all YARA rules from the yara_rules/ directory.
-    Compiled rules are cached in _compiled_rules for performance.
-    Returns None if YARA is not available or rules fail to compile.
-    """
     global _compiled_rules
-
     if _compiled_rules is not None:
         return _compiled_rules
-
     if not YARA_AVAILABLE:
         return None
-
     rule_files = {}
     try:
-        for filename in os.listdir(YARA_RULES_DIR):
-            if filename.endswith(".yar") or filename.endswith(".yara"):
-                namespace = filename.replace(".yar", "").replace(".yara", "")
-                full_path = os.path.join(YARA_RULES_DIR, filename)
-                rule_files[namespace] = full_path
-
-        if not rule_files:
-            logger.warning(f"No YARA rule files found in {YARA_RULES_DIR}")
+        if not os.path.isdir(YARA_RULES_DIR):
             return None
-
+        for filename in os.listdir(YARA_RULES_DIR):
+            if filename.endswith((".yar", ".yara")):
+                ns = filename.replace(".yar", "").replace(".yara", "")
+                rule_files[ns] = os.path.join(YARA_RULES_DIR, filename)
+        if not rule_files:
+            return None
         _compiled_rules = yara.compile(filepaths=rule_files)
-        logger.info(f"YARA rules compiled from: {list(rule_files.keys())}")
+        logger.info("YARA rules compiled: %s", list(rule_files.keys()))
         return _compiled_rules
-
     except Exception as e:
-        logger.error(f"YARA rule compilation failed: {e}")
+        logger.error("YARA compilation failed: %s", e)
         return None
 
 
@@ -179,94 +183,141 @@ def analyze_file(
     """
     Run complete static analysis on uploaded file bytes.
 
-    Args:
-        file_bytes: Raw file content as bytes.
-        filename:   Original filename (used to determine file type).
-        email_id:   Optional link to parent EmailScan record.
+    Returns a flat result dict with these top-level keys so that both
+    scan_router.py and attachments.js can read them without extra nesting:
 
-    Returns:
-        FileAnalysisResult dict containing:
-          - hashes (md5, sha1, sha256)
-          - file_type, file_category, file_size
-          - entropy + is_packed flag
-          - yara_matches list
-          - static_findings list
-          - type_specific_findings dict
-          - verdict: Clean / Suspicious / Malicious
-          - risk_score: 0–100
-          - risk_flags: list of flag strings
+        filename, file_type, file_category, file_size
+        hashes: {md5, sha1, sha256}
+        entropy, is_packed, is_high_entropy
+        type_mismatch: bool          ← NEW: extension vs magic bytes disagree
+        yara_matches: list
+        static_findings: list        (raw list of finding dicts)
+        suspicious_strings: list     ← ALIAS of static_findings for the JS
+        pdf_analysis:    dict | {}   ← type-specific, top-level for JS
+        macro_analysis:  dict | {}
+        html_analysis:   dict | {}
+        zip_analysis:    dict | {}
+        script_analysis: dict | {}
+        exe_analysis:    dict | {}
+        embedded_urls:   list        ← NEW: aggregated from all type analyses
+        vt_result:       dict | None ← NEW: VirusTotal hash lookup (optional)
+        known_bad:       bool        ← NEW: true if VT detects ≥ 3 engines
+        verdict:         str         "CLEAN" | "SUSPICIOUS" | "MALICIOUS"
+        risk_score:      float       0–100
+        risk_flags:      list[str]
+        verdict_reasons: list[str]   ← NEW: human-readable explanation lines
+        email_id:        int | None
+        analyzed_at:     str
     """
-
-    # ── Size check ────────────────────────────────────────────────────────
     if len(file_bytes) > MAX_FILE_SIZE:
         return _error_result(
             filename,
             f"File too large ({len(file_bytes)} bytes, max {MAX_FILE_SIZE})"
         )
-
     if len(file_bytes) == 0:
         return _error_result(filename, "File is empty")
 
-    # ── Step 1: Hash computation ───────────────────────────────────────────
+    # Step 1 — Hashes
     hashes = _compute_hashes(file_bytes)
 
-    # ── Step 2: File type detection ────────────────────────────────────────
-    file_type, file_category = _detect_file_type(file_bytes, filename)
+    # Step 2 — File type detection + mismatch check
+    file_type, file_category, type_mismatch = _detect_file_type(file_bytes, filename)
 
-    # ── Step 3: Entropy analysis ───────────────────────────────────────────
-    entropy    = _compute_entropy(file_bytes)
-    is_packed  = entropy >= ENTROPY_PACKED
+    # Step 3 — Entropy
+    entropy         = _compute_entropy(file_bytes)
+    is_packed       = entropy >= ENTROPY_PACKED
     is_high_entropy = entropy >= ENTROPY_SUSPICIOUS
 
-    # ── Step 4: YARA scanning ─────────────────────────────────────────────
+    # Step 4 — YARA
     yara_matches = _run_yara_scan(file_bytes, filename)
 
-    # ── Step 5: Generic string extraction ─────────────────────────────────
+    # Step 5 — Suspicious strings
     static_findings = _extract_suspicious_strings(file_bytes)
 
-    # ── Step 6: Type-specific analysis ────────────────────────────────────
-    type_findings = {}
+    # Step 6 — Type-specific analysis
+    pdf_analysis    = {}
+    macro_analysis  = {}
+    html_analysis   = {}
+    zip_analysis    = {}
+    script_analysis = {}
+    exe_analysis    = {}
 
     if file_type == "pdf":
-        type_findings = _analyze_pdf(file_bytes, filename)
+        pdf_analysis = _analyze_pdf(file_bytes, filename)
     elif file_type in ("zip", "docx", "xlsx", "pptx"):
-        type_findings = _analyze_zip_office(file_bytes, filename)
+        zip_result     = _analyze_zip_office(file_bytes, filename)
+        zip_analysis   = zip_result.get("zip_analysis",   {})
+        macro_analysis = zip_result.get("macro_analysis", {})
     elif file_type == "ole":
-        type_findings = _analyze_ole(file_bytes, filename)
+        macro_analysis = _analyze_ole(file_bytes, filename)
     elif file_type in ("html", "htm"):
-        type_findings = _analyze_html(file_bytes, filename)
+        html_analysis = _analyze_html(file_bytes, filename)
     elif file_type in ("js", "script"):
-        type_findings = _analyze_script(file_bytes, filename)
+        script_analysis = _analyze_script(file_bytes, filename)
     elif file_type in ("exe", "elf", "dll"):
-        type_findings = _analyze_executable(file_bytes, filename)
+        exe_analysis = _analyze_executable(file_bytes, filename)
 
-    # ── Step 7: Verdict + risk scoring ────────────────────────────────────
-    verdict, risk_score, risk_flags = _compute_verdict(
-        yara_matches=yara_matches,
-        static_findings=static_findings,
-        type_findings=type_findings,
-        entropy=entropy,
-        is_packed=is_packed,
-        file_type=file_type
+    # Step 7 — VirusTotal hash lookup (optional)
+    vt_result = _vt_lookup(hashes["sha256"])
+    known_bad = False
+    if vt_result and isinstance(vt_result.get("malicious"), int):
+        known_bad = vt_result["malicious"] >= 3
+
+    # Step 8 — Aggregate all embedded URLs from any analysis
+    embedded_urls = _collect_urls(pdf_analysis, html_analysis, zip_analysis)
+
+    # Step 9 — Verdict
+    verdict, risk_score, risk_flags, verdict_reasons = _compute_verdict(
+        yara_matches    = yara_matches,
+        static_findings = static_findings,
+        pdf_analysis    = pdf_analysis,
+        macro_analysis  = macro_analysis,
+        html_analysis   = html_analysis,
+        zip_analysis    = zip_analysis,
+        script_analysis = script_analysis,
+        exe_analysis    = exe_analysis,
+        entropy         = entropy,
+        is_packed       = is_packed,
+        file_type       = file_type,
+        type_mismatch   = type_mismatch,
+        known_bad       = known_bad,
     )
 
     return {
-        "filename":           filename,
-        "file_type":          file_type,
-        "file_category":      file_category,
-        "file_size":          len(file_bytes),
-        "hashes":             hashes,
-        "entropy":            round(entropy, 4),
-        "is_packed":          is_packed,
-        "is_high_entropy":    is_high_entropy,
-        "yara_matches":       yara_matches,
-        "static_findings":    static_findings,
-        "type_findings":      type_findings,
-        "verdict":            verdict,
-        "risk_score":         risk_score,
-        "risk_flags":         risk_flags,
-        "email_id":           email_id,
-        "analyzed_at":        datetime.utcnow().isoformat() + "Z"
+        "filename":         filename,
+        "file_type":        file_type,
+        "file_category":    file_category,
+        "file_size":        len(file_bytes),
+        "hashes":           hashes,
+        "entropy":          round(entropy, 4),
+        "is_packed":        is_packed,
+        "is_high_entropy":  is_high_entropy,
+        # NEW: extension vs magic byte mismatch
+        "type_mismatch":    type_mismatch,
+        "yara_matches":     yara_matches,
+        # Both keys point to the same data — static_findings for Python
+        # callers, suspicious_strings for the JS renderer
+        "static_findings":  static_findings,
+        "suspicious_strings": [f["string"] for f in static_findings],
+        # Type-specific analysis dicts — top-level so JS can read directly
+        "pdf_analysis":     pdf_analysis,
+        "macro_analysis":   macro_analysis,
+        "html_analysis":    html_analysis,
+        "zip_analysis":     zip_analysis,
+        "script_analysis":  script_analysis,
+        "exe_analysis":     exe_analysis,
+        # Aggregated URLs from all analysis types
+        "embedded_urls":    embedded_urls,
+        # VirusTotal
+        "vt_result":        vt_result,
+        "known_bad":        known_bad,
+        # Verdict
+        "verdict":          verdict,       # FIX: now uppercase "CLEAN" etc.
+        "risk_score":       risk_score,
+        "risk_flags":       risk_flags,
+        "verdict_reasons":  verdict_reasons,
+        "email_id":         email_id,
+        "analyzed_at":      datetime.utcnow().isoformat() + "Z"
     }
 
 
@@ -275,11 +326,6 @@ def analyze_file(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_hashes(data: bytes) -> dict:
-    """
-    Compute MD5, SHA-1, and SHA-256 hashes of the file.
-    These can be checked against threat intelligence databases
-    like VirusTotal, MalwareBazaar, or local blocklists.
-    """
     return {
         "md5":    hashlib.md5(data).hexdigest(),
         "sha1":   hashlib.sha1(data).hexdigest(),
@@ -288,75 +334,66 @@ def _compute_hashes(data: bytes) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 2: File type detection
+# Step 2: File type detection + mismatch check  (NEW: returns 3-tuple)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _detect_file_type(data: bytes, filename: str) -> tuple:
     """
-    Detect the true file type using magic bytes (not just the extension).
-    Attackers often rename executables to .pdf or .jpg to bypass filters.
-
-    Priority: magic bytes > file extension
-    Returns: (file_type: str, file_category: str)
+    Returns (file_type, file_category, type_mismatch).
+    type_mismatch=True when magic bytes indicate a different type than the
+    file extension — e.g. an EXE renamed to .pdf.
     """
-    # Check magic bytes first
+    magic_type = None
     for magic, ftype in FILE_SIGNATURES.items():
         if data[:len(magic)] == magic:
-            # ZIP magic bytes cover DOCX/XLSX/PPTX (they are ZIP archives)
-            if ftype == "zip":
-                ext = os.path.splitext(filename)[1].lower()
-                if ext in (".docx", ".docm"):
-                    ftype = "docx"
-                elif ext in (".xlsx", ".xlsm"):
-                    ftype = "xlsx"
-                elif ext in (".pptx", ".pptm"):
-                    ftype = "pptx"
-                # else stays as "zip"
-            ext      = "." + ftype
-            category = EXTENSION_MAP.get(ext, "unknown")
-            return ftype, category
+            magic_type = ftype
+            break
 
-    # Fall back to extension
     ext      = os.path.splitext(filename)[1].lower()
-    ftype    = ext.lstrip(".")
+    ext_type = ext.lstrip(".") or "unknown"
+
+    # Refine ZIP magic to Office type based on extension
+    if magic_type == "zip":
+        if ext in (".docx", ".docm"):
+            magic_type = "docx"
+        elif ext in (".xlsx", ".xlsm"):
+            magic_type = "xlsx"
+        elif ext in (".pptx", ".pptm"):
+            magic_type = "pptx"
+
+    if magic_type:
+        category      = EXTENSION_MAP.get("." + magic_type, "unknown")
+        # Mismatch: declared extension expects a different magic type
+        expected_magic = EXPECTED_MAGIC.get(ext)
+        type_mismatch  = bool(
+            expected_magic and
+            magic_type != expected_magic and
+            magic_type not in ("zip",)  # ZIP covers Office formats
+        )
+        return magic_type, category, type_mismatch
+
+    # No magic match — fall back to extension
     category = EXTENSION_MAP.get(ext, "unknown")
-    return ftype or "unknown", category
+    return ext_type, category, False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 3: Entropy analysis
+# Step 3: Entropy
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_entropy(data: bytes) -> float:
-    """
-    Calculate Shannon entropy of file bytes.
-
-    Interpretation:
-      0–3.5: mostly text / low complexity
-      3.5–6: normal binary / compiled code
-      6–7.2: compressed or partially encrypted
-      7.2+:  packed executable or fully encrypted (malware signal)
-
-    We sample up to 65536 bytes for performance on large files.
-    """
     if not data:
         return 0.0
-
-    # Sample first 64KB for performance
     sample = data[:65536]
-
-    # Count byte frequency
     freq   = [0] * 256
     for byte in sample:
         freq[byte] += 1
-
     length  = len(sample)
     entropy = 0.0
     for count in freq:
         if count > 0:
             p = count / length
             entropy -= p * math.log2(p)
-
     return round(entropy, 4)
 
 
@@ -365,20 +402,12 @@ def _compute_entropy(data: bytes) -> float:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _run_yara_scan(data: bytes, filename: str) -> list:
-    """
-    Scan file bytes against all compiled YARA rules.
-
-    Returns a list of match dicts:
-    [{"rule": str, "namespace": str, "tags": list, "meta": dict}]
-    """
     rules = _get_yara_rules()
     if rules is None:
         return []
-
     matches = []
     try:
-        yara_matches = rules.match(data=data)
-        for match in yara_matches:
+        for match in rules.match(data=data):
             matches.append({
                 "rule":      match.rule,
                 "namespace": match.namespace,
@@ -386,44 +415,31 @@ def _run_yara_scan(data: bytes, filename: str) -> list:
                 "meta":      dict(match.meta),
                 "severity":  match.meta.get("severity", "MEDIUM")
             })
-
     except Exception as e:
-        logger.warning(f"YARA scan error for {filename}: {e}")
-
+        logger.warning("YARA scan error for %s: %s", filename, e)
     return matches
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 5: Generic suspicious string extraction
+# Step 5: Suspicious string extraction
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_suspicious_strings(data: bytes) -> list:
-    """
-    Scan raw file bytes for known suspicious string patterns.
-    Works on any file type — no parsing required.
-
-    Returns a list of finding dicts:
-    [{"string": str, "count": int, "context": str}]
-    """
-    findings = []
+    findings   = []
     data_lower = data.lower()
-
     for pattern in SUSPICIOUS_STRINGS:
         count = data_lower.count(pattern.lower())
         if count > 0:
-            # Find the first occurrence for context
-            idx = data_lower.find(pattern.lower())
+            idx     = data_lower.find(pattern.lower())
             start   = max(0, idx - 20)
             end     = min(len(data), idx + len(pattern) + 20)
             context = data[start:end].decode("utf-8", errors="replace")
             context = re.sub(r'[\x00-\x1f\x7f-\xff]', '.', context)
-
             findings.append({
                 "string":  pattern.decode("utf-8", errors="replace"),
                 "count":   count,
                 "context": context.strip()
             })
-
     return findings
 
 
@@ -432,70 +448,43 @@ def _extract_suspicious_strings(data: bytes) -> list:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _analyze_pdf(data: bytes, filename: str) -> dict:
-    """
-    Analyze a PDF file for embedded threats.
-
-    Checks:
-      - /JavaScript or /JS actions (auto-execute on open)
-      - /OpenAction or /AA (additional actions)
-      - /Launch (launches external programs)
-      - /EmbeddedFile (attachments inside PDF)
-      - /URI (suspicious embedded links)
-      - Embedded executable signatures
-    """
     findings = {
-        "has_javascript":    False,
-        "has_openaction":    False,
-        "has_launch":        False,
-        "has_embedded_file": False,
-        "embedded_urls":     [],
-        "suspicious_actions":[],
-        "text_sample":       ""
+        "has_javascript":     False,
+        "has_openaction":     False,
+        "has_launch":         False,
+        "has_embedded_file":  False,
+        "embedded_urls":      [],
+        "suspicious_actions": [],
+        "pdf_findings":       [],
+        "text_sample":        ""
     }
 
     pdf_text = data.decode("latin-1", errors="replace")
 
-    # Check for dangerous PDF actions
     dangerous_keywords = {
-        "/JavaScript": "Embedded JavaScript — can execute code on PDF open",
-        "/JS":         "Embedded JavaScript shorthand",
-        "/OpenAction": "OpenAction — executes on document open",
+        "/JavaScript": "Embedded JavaScript — executes on PDF open",
+        "/JS":         "Embedded JavaScript (shorthand)",
+        "/OpenAction": "OpenAction — triggers on document open",
         "/Launch":     "Launch action — can start external programs",
-        "/AA":         "Additional Actions — trigger on various events",
-        "/EmbeddedFile":"Embedded file inside PDF"
+        "/AA":         "Additional Actions on various events",
+        "/EmbeddedFile":"Embedded file attachment inside PDF"
     }
 
     for keyword, description in dangerous_keywords.items():
         if keyword.lower() in pdf_text.lower():
-            findings["suspicious_actions"].append({
-                "keyword":     keyword,
-                "description": description
-            })
+            findings["suspicious_actions"].append({"keyword": keyword, "description": description})
+            findings["pdf_findings"].append(description)
 
-    findings["has_javascript"]    = any(
-        k in ("/JavaScript", "/JS")
-        for k in [a["keyword"] for a in findings["suspicious_actions"]]
-    )
-    findings["has_openaction"]    = "/OpenAction" in [
-        a["keyword"] for a in findings["suspicious_actions"]
-    ]
-    findings["has_launch"]        = "/Launch" in [
-        a["keyword"] for a in findings["suspicious_actions"]
-    ]
-    findings["has_embedded_file"] = "/EmbeddedFile" in [
-        a["keyword"] for a in findings["suspicious_actions"]
-    ]
+    action_keys = [a["keyword"] for a in findings["suspicious_actions"]]
+    findings["has_javascript"]    = any(k in ("/JavaScript", "/JS") for k in action_keys)
+    findings["has_openaction"]    = "/OpenAction" in action_keys
+    findings["has_launch"]        = "/Launch"     in action_keys
+    findings["has_embedded_file"] = "/EmbeddedFile" in action_keys
 
-    # Extract embedded URLs
-    url_pattern = re.compile(
-        rb'https?://[^\s\x00-\x1f\x7f-\xff<>"]{5,100}',
-        re.IGNORECASE
-    )
-    urls = [u.decode("utf-8", errors="replace")
-            for u in url_pattern.findall(data)]
-    findings["embedded_urls"] = list(set(urls))[:20]
+    url_pattern = re.compile(rb'https?://[^\s\x00-\x1f\x7f-\xff<>"]{5,150}', re.IGNORECASE)
+    urls = list({u.decode("utf-8", errors="replace") for u in url_pattern.findall(data)})
+    findings["embedded_urls"] = urls[:20]
 
-    # Try to extract readable text
     if PDFMINER_AVAILABLE:
         try:
             import io
@@ -508,97 +497,107 @@ def _analyze_pdf(data: bytes, filename: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 6b: ZIP / Office (DOCX/XLSX/PPTX) analysis
+# Step 6b: ZIP / Office (DOCX/XLSX/PPTX) — returns both zip and macro dicts
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _analyze_zip_office(data: bytes, filename: str) -> dict:
     """
-    Analyze ZIP archives and Office Open XML files (DOCX/XLSX/PPTX).
-    Office documents are ZIP archives — we open them and inspect contents.
-
-    Checks:
-      - Embedded VBA macros (vbaProject.bin)
-      - External relationship URLs (data exfiltration)
-      - Nested executables inside ZIP
-      - Password-protected archives
+    Returns {"zip_analysis": {...}, "macro_analysis": {...}} so each can be
+    stored at a separate top-level key in the final result dict.
     """
-    findings = {
-        "file_count":        0,
-        "has_macros":        False,
-        "has_vba_project":   False,
-        "external_rels":     [],
-        "nested_executables":[],
-        "file_list":         [],
-        "is_password_protected": False
+    zip_info = {
+        "file_count":          0,
+        "file_list":           [],
+        "nested_executables":  [],
+        "external_rels":       [],
+        "is_password_protected": False,
+        "zip_findings":        [],
+        "embedded_urls":       [],
+    }
+    macro_info = {
+        "has_macros":      False,
+        "has_vba_project": False,
+        "vba_streams":     [],
+        "macro_keywords":  [],
+        "macro_findings":  [],
     }
 
     try:
         import io
-        zf = zipfile.ZipFile(io.BytesIO(data))
+        zf        = zipfile.ZipFile(io.BytesIO(data))
         file_list = zf.namelist()
-        findings["file_count"] = len(file_list)
-        findings["file_list"]  = file_list[:30]
+        zip_info["file_count"] = len(file_list)
+
+        # Structured file list with suspicion flag
+        structured = []
+        dangerous_exts = {".exe", ".dll", ".bat", ".cmd", ".ps1", ".vbs", ".js"}
+        for name in file_list[:50]:
+            ext         = os.path.splitext(name)[1].lower()
+            is_sus      = ext in dangerous_exts
+            structured.append({"name": name, "suspicious": is_sus})
+            if is_sus:
+                zip_info["nested_executables"].append(name)
+
+        zip_info["file_list"] = structured
 
         for name in file_list:
             name_lower = name.lower()
 
-            # VBA macro file
             if "vbaproject.bin" in name_lower:
-                findings["has_vba_project"] = True
-                findings["has_macros"]      = True
+                macro_info["has_vba_project"] = True
+                macro_info["has_macros"]      = True
+                macro_info["vba_streams"].append(name)
+                macro_info["macro_findings"].append("VBA project file detected: " + name)
 
-            # Any .bas, .cls, .frm files (VBA modules)
-            if any(name_lower.endswith(ext)
-                   for ext in (".bas", ".cls", ".frm")):
-                findings["has_macros"] = True
+            if any(name_lower.endswith(ext) for ext in (".bas", ".cls", ".frm")):
+                macro_info["has_macros"] = True
 
-            # Check for nested executables
-            if any(name_lower.endswith(ext)
-                   for ext in (".exe", ".dll", ".bat", ".cmd", ".ps1", ".vbs")):
-                findings["nested_executables"].append(name)
-
-            # Check relationships files for external URLs
             if "relationships" in name_lower or name_lower.endswith(".rels"):
                 try:
-                    content = zf.read(name).decode("utf-8", errors="replace")
-                    ext_urls = re.findall(
-                        r'Target="(https?://[^"]{5,200})"',
-                        content
-                    )
-                    findings["external_rels"].extend(ext_urls)
+                    content  = zf.read(name).decode("utf-8", errors="replace")
+                    ext_urls = re.findall(r'Target="(https?://[^"]{5,200})"', content)
+                    if ext_urls:
+                        zip_info["external_rels"].extend(ext_urls)
+                        zip_info["embedded_urls"].extend(ext_urls)
+                        zip_info["zip_findings"].append(
+                            f"External relationship URL: {ext_urls[0][:80]}"
+                        )
                 except Exception:
                     pass
+
+        if zip_info["nested_executables"]:
+            zip_info["zip_findings"].append(
+                f"Executable(s) inside archive: {', '.join(zip_info['nested_executables'][:3])}"
+            )
 
         zf.close()
 
     except zipfile.BadZipFile:
-        findings["error"] = "File is not a valid ZIP/Office document"
+        zip_info["error"] = "Not a valid ZIP/Office document"
     except RuntimeError as e:
         if "password" in str(e).lower() or "encrypted" in str(e).lower():
-            findings["is_password_protected"] = True
+            zip_info["is_password_protected"] = True
+            zip_info["zip_findings"].append("Archive is password-protected")
         else:
-            findings["error"] = str(e)
+            zip_info["error"] = str(e)
     except Exception as e:
-        findings["error"] = str(e)[:100]
+        zip_info["error"] = str(e)[:100]
 
-    return findings
+    return {"zip_analysis": zip_info, "macro_analysis": macro_info}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 6c: OLE (old Office .doc/.xls) analysis
+# Step 6c: OLE (legacy .doc/.xls)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _analyze_ole(data: bytes, filename: str) -> dict:
-    """
-    Analyze legacy OLE2 Office documents (.doc, .xls, .ppt).
-    These use the OLE Compound File format and can contain VBA macros
-    directly embedded in the file structure.
-    """
     findings = {
-        "has_macros":    False,
-        "vba_streams":   [],
-        "macro_keywords":[],
-        "ole_streams":   []
+        "has_macros":      False,
+        "has_vba_project": False,
+        "vba_streams":     [],
+        "macro_keywords":  [],
+        "ole_streams":     [],
+        "macro_findings":  [],
     }
 
     if not OLEFILE_AVAILABLE:
@@ -607,38 +606,33 @@ def _analyze_ole(data: bytes, filename: str) -> dict:
 
     try:
         import io
-        ole = olefile.OleFileIO(io.BytesIO(data))
+        ole     = olefile.OleFileIO(io.BytesIO(data))
         streams = ole.listdir()
         findings["ole_streams"] = ["/".join(s) for s in streams[:20]]
 
-        # Look for VBA project stream
-        vba_stream_names = [
-            "Macros/VBA",
-            "_VBA_PROJECT_CUR/VBA",
-            "VBA"
-        ]
-        for stream_path in vba_stream_names:
+        for stream_path in ["Macros/VBA", "_VBA_PROJECT_CUR/VBA", "VBA"]:
             if ole.exists(stream_path.split("/")):
-                findings["has_macros"]  = True
+                findings["has_macros"]      = True
+                findings["has_vba_project"] = True
                 findings["vba_streams"].append(stream_path)
+                findings["macro_findings"].append(f"VBA stream found: {stream_path}")
 
-        # Check all streams for macro keywords
-        suspicious_macro_kw = [
+        suspicious_kws = [
             b"Shell", b"CreateObject", b"AutoOpen",
             b"Document_Open", b"Auto_Open", b"Workbook_Open"
         ]
         for entry in streams:
             try:
                 stream_data = ole.openstream(entry).read()
-                for kw in suspicious_macro_kw:
+                for kw in suspicious_kws:
                     if kw.lower() in stream_data.lower():
                         kw_str = kw.decode("utf-8")
                         if kw_str not in findings["macro_keywords"]:
                             findings["macro_keywords"].append(kw_str)
                             findings["has_macros"] = True
+                            findings["macro_findings"].append(f"Macro keyword: {kw_str}")
             except Exception:
                 continue
-
         ole.close()
 
     except Exception as e:
@@ -648,43 +642,30 @@ def _analyze_ole(data: bytes, filename: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 6d: HTML attachment analysis
+# Step 6d: HTML analysis
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _analyze_html(data: bytes, filename: str) -> dict:
-    """
-    Analyze HTML files for credential harvesting indicators.
-
-    Phishing HTML attachments typically:
-      - Contain login forms with password fields
-      - Use JavaScript to POST credentials to an attacker's server
-      - Embed hidden iframes for tracking or redirection
-      - Use heavy obfuscation (base64, eval, fromCharCode)
-      - Mimic legitimate brand login pages
-
-    Returns a detailed breakdown of all suspicious HTML elements found.
-    """
     findings = {
-        "has_password_field":     False,
-        "has_form_with_action":   False,
-        "form_actions":           [],
-        "has_hidden_iframe":      False,
-        "iframe_sources":         [],
-        "has_obfuscated_js":      False,
-        "obfuscation_patterns":   [],
-        "has_external_scripts":   False,
-        "external_script_srcs":   [],
-        "has_meta_redirect":      False,
-        "meta_redirect_url":      "",
-        "embedded_urls":          [],
-        "brand_keywords_found":   [],
-        "suspicious_elements":    []
+        "has_password_field":   False,
+        "has_form_with_action": False,
+        "form_actions":         [],
+        "has_hidden_iframe":    False,
+        "iframe_sources":       [],
+        "has_obfuscated_js":    False,
+        "obfuscation_patterns": [],
+        "has_external_scripts": False,
+        "external_script_srcs": [],
+        "has_meta_redirect":    False,
+        "meta_redirect_url":    "",
+        "embedded_urls":        [],
+        "brand_keywords_found": [],
+        "html_findings":        [],
     }
 
     html_text = data.decode("utf-8", errors="replace")
 
     if not BS4_AVAILABLE:
-        # Fallback: regex-based checks
         findings["has_password_field"] = bool(
             re.search(r'type=["\']password["\']', html_text, re.IGNORECASE)
         )
@@ -693,76 +674,61 @@ def _analyze_html(data: bytes, filename: str) -> dict:
     try:
         soup = BeautifulSoup(html_text, "lxml")
 
-        # ── Password fields ────────────────────────────────────────────────
         pwd_fields = soup.find_all("input", {"type": re.compile("password", re.I)})
         if pwd_fields:
             findings["has_password_field"] = True
-            findings["suspicious_elements"].append(
-                f"{len(pwd_fields)} password input field(s) detected"
-            )
+            findings["html_findings"].append(f"{len(pwd_fields)} password input field(s)")
 
-        # ── Form actions ───────────────────────────────────────────────────
         for form in soup.find_all("form"):
             action = form.get("action", "")
             method = form.get("method", "get").lower()
             if action:
                 findings["has_form_with_action"] = True
-                findings["form_actions"].append({
-                    "action": action,
-                    "method": method
-                })
-                # Flag forms posting to external URLs
+                findings["form_actions"].append({"action": action, "method": method})
                 if action.startswith(("http://", "https://")) and method == "post":
-                    findings["suspicious_elements"].append(
-                        f"Form POSTs credentials to external URL: {action[:60]}"
+                    findings["html_findings"].append(
+                        f"Form POSTs to external URL: {action[:60]}"
                     )
 
-        # ── Hidden iframes ─────────────────────────────────────────────────
         for iframe in soup.find_all("iframe"):
-            src = iframe.get("src", "")
-            style = iframe.get("style", "")
-            width = iframe.get("width", "")
+            src    = iframe.get("src", "")
+            style  = iframe.get("style", "")
+            width  = iframe.get("width", "")
             height = iframe.get("height", "")
-
             is_hidden = (
                 "display:none" in style.replace(" ", "").lower() or
                 "visibility:hidden" in style.replace(" ", "").lower() or
                 width in ("0", "0px", "1px") or
                 height in ("0", "0px", "1px")
             )
-
             if is_hidden:
                 findings["has_hidden_iframe"] = True
                 findings["iframe_sources"].append(src or "no-src")
-                findings["suspicious_elements"].append(
-                    f"Hidden iframe detected (src: {src[:60] or 'empty'})"
-                )
+                findings["html_findings"].append(f"Hidden iframe (src: {src[:60] or 'empty'})")
 
-        # ── Obfuscated JavaScript ──────────────────────────────────────────
         obfusc_patterns = [
             (r'\beval\s*\(',        "eval() call"),
             (r'\batob\s*\(',        "Base64 decode (atob)"),
             (r'fromCharCode',       "fromCharCode encoding"),
             (r'unescape\s*\(',      "unescape() obfuscation"),
             (r'decodeURIComponent', "URL decoding"),
-            (r'String\.fromChar',   "String.fromCharCode"),
         ]
-        all_js = " ".join(
-            script.get_text() for script in soup.find_all("script")
-        )
+        all_js = " ".join(script.get_text() for script in soup.find_all("script"))
         for pattern, desc in obfusc_patterns:
             if re.search(pattern, all_js, re.IGNORECASE):
                 findings["has_obfuscated_js"] = True
                 findings["obfuscation_patterns"].append(desc)
+        if findings["has_obfuscated_js"]:
+            findings["html_findings"].append(
+                "Obfuscated JS: " + ", ".join(findings["obfuscation_patterns"])
+            )
 
-        # ── External scripts ───────────────────────────────────────────────
         for script in soup.find_all("script", src=True):
             src = script.get("src", "")
             if src.startswith(("http://", "https://")):
                 findings["has_external_scripts"] = True
                 findings["external_script_srcs"].append(src[:100])
 
-        # ── Meta redirects ─────────────────────────────────────────────────
         for meta in soup.find_all("meta"):
             content = meta.get("content", "")
             if "url=" in content.lower():
@@ -770,90 +736,80 @@ def _analyze_html(data: bytes, filename: str) -> dict:
                 if url_match:
                     findings["has_meta_redirect"] = True
                     findings["meta_redirect_url"] = url_match.group(1)
+                    findings["html_findings"].append(
+                        f"Meta redirect to: {url_match.group(1)[:80]}"
+                    )
 
-        # ── Brand keywords ─────────────────────────────────────────────────
         page_text = soup.get_text().lower()
         brand_kws = [
             "paypal", "google", "microsoft", "apple", "amazon",
             "netflix", "facebook", "instagram", "bank", "chase",
             "citibank", "wells fargo", "barclays", "hsbc"
         ]
-        findings["brand_keywords_found"] = [
-            kw for kw in brand_kws if kw in page_text
-        ]
+        findings["brand_keywords_found"] = [kw for kw in brand_kws if kw in page_text]
 
-        # ── Collect all URLs ───────────────────────────────────────────────
-        all_hrefs = [
+        all_hrefs = list({
             a.get("href", "") for a in soup.find_all("a", href=True)
             if a.get("href", "").startswith(("http://", "https://"))
-        ]
-        findings["embedded_urls"] = list(set(all_hrefs))[:20]
+        })
+        findings["embedded_urls"] = all_hrefs[:20]
 
     except Exception as e:
         findings["parse_error"] = str(e)[:100]
-        logger.warning(f"HTML analysis error for {filename}: {e}")
 
     return findings
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 6e: Script analysis (JS, PS1, VBS, etc.)
+# Step 6e: Script analysis
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _analyze_script(data: bytes, filename: str) -> dict:
-    """
-    Analyze script files (JavaScript, PowerShell, VBScript, Bash).
-    Focuses on detecting download cradles, execution chains, and obfuscation.
-    """
     findings = {
         "has_eval":          False,
         "has_download":      False,
         "has_exec":          False,
         "obfuscation_score": 0,
-        "suspicious_calls":  []
+        "suspicious_calls":  [],
+        "script_findings":   [],
     }
 
     try:
         text       = data.decode("utf-8", errors="replace")
         text_lower = text.lower()
 
-        eval_patterns = ["eval(", "eval (", "execute(", "invoke-expression"]
-        for p in eval_patterns:
+        for p in ["eval(", "eval (", "execute(", "invoke-expression"]:
             if p in text_lower:
                 findings["has_eval"] = True
                 findings["suspicious_calls"].append(f"eval/execute: {p}")
                 findings["obfuscation_score"] += 2
 
-        download_patterns = [
-            "downloadstring", "downloadfile", "wget ", "curl ",
-            "invoke-webrequest", "net.webclient", "xmlhttp"
-        ]
-        for p in download_patterns:
+        for p in ["downloadstring", "downloadfile", "wget ", "curl ",
+                  "invoke-webrequest", "net.webclient", "xmlhttp"]:
             if p in text_lower:
                 findings["has_download"] = True
                 findings["suspicious_calls"].append(f"download: {p}")
                 findings["obfuscation_score"] += 2
 
-        exec_patterns = [
-            "wscript.shell", "shell32", "createobject",
-            "start-process", "cmd.exe", "powershell"
-        ]
-        for p in exec_patterns:
+        for p in ["wscript.shell", "shell32", "createobject",
+                  "start-process", "cmd.exe", "powershell"]:
             if p in text_lower:
                 findings["has_exec"] = True
                 findings["suspicious_calls"].append(f"exec: {p}")
                 findings["obfuscation_score"] += 1
 
-        # Obfuscation detection: high ratio of special chars
         special_ratio = sum(
             1 for c in text
-            if not c.isalnum() and c not in (" ", "\n", "\t", ".", ",", ";", "(", ")")
+            if not c.isalnum() and c not in " \n\t.,;()"
         ) / max(len(text), 1)
         if special_ratio > 0.3:
             findings["obfuscation_score"] += 3
             findings["suspicious_calls"].append(
-                f"High special character ratio: {special_ratio:.2f}"
+                f"High special char ratio: {special_ratio:.2f}"
             )
+
+        if findings["suspicious_calls"]:
+            findings["script_findings"] = findings["suspicious_calls"][:5]
 
     except Exception as e:
         findings["error"] = str(e)[:100]
@@ -866,148 +822,275 @@ def _analyze_script(data: bytes, filename: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _analyze_executable(data: bytes, filename: str) -> dict:
-    """
-    Analyze PE executables and ELF binaries.
-    Focuses on high-level indicators without full disassembly.
-    """
     findings = {
-        "is_pe":            False,
-        "is_elf":           False,
-        "section_entropies":[],
-        "imported_strings": [],
-        "has_upx":          False,
-        "has_suspicious_imports": False
+        "is_pe":                   False,
+        "is_elf":                  False,
+        "imported_strings":        [],
+        "has_upx":                 False,
+        "has_suspicious_imports":  False,
+        "exe_findings":            [],
     }
 
-    # PE header check (MZ)
     if data[:2] == b'\x4d\x5a':
         findings["is_pe"] = True
-
-    # ELF header check
     if data[:4] == b'\x7f\x45\x4c\x46':
         findings["is_elf"] = True
 
-    # UPX packer detection
     if b'UPX' in data[:512] or b'UPX0' in data or b'UPX1' in data:
         findings["has_upx"] = True
+        findings["exe_findings"].append("UPX packer signature detected")
 
-    # Extract readable ASCII strings (length > 6)
-    # This gives a quick view of what functions/APIs the executable uses
     printable = re.findall(rb'[ -~]{6,}', data[:32768])
-    str_list  = [s.decode("ascii", errors="replace") for s in printable[:50]]
-    findings["imported_strings"] = str_list
+    findings["imported_strings"] = [
+        s.decode("ascii", errors="replace") for s in printable[:50]
+    ]
 
-    # Check for suspicious Windows API imports
     suspicious_apis = [
         "VirtualAlloc", "VirtualProtect", "WriteProcessMemory",
         "CreateRemoteThread", "LoadLibrary", "GetProcAddress",
         "InternetOpen", "URLDownloadToFile", "ShellExecute",
         "CreateProcess", "WinExec", "RegSetValue"
     ]
-    found_apis = [api for api in suspicious_apis
-                  if api.encode() in data[:65536]]
+    found_apis = [api for api in suspicious_apis if api.encode() in data[:65536]]
     if found_apis:
         findings["has_suspicious_imports"] = True
-        findings["imported_strings"] = found_apis[:10]
+        findings["imported_strings"]       = found_apis[:10]
+        findings["exe_findings"].append(
+            f"Suspicious API imports: {', '.join(found_apis[:5])}"
+        )
 
     return findings
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 7: Verdict computation
+# NEW Step 7: VirusTotal hash lookup
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _vt_lookup(sha256: str) -> Optional[dict]:
+    """
+    Look up the SHA-256 hash against the VirusTotal public API v3.
+    Requires VIRUSTOTAL_API_KEY environment variable or Flask config.
+    Returns a summary dict or None if no API key is configured.
+
+    Result dict:
+        {
+          "malicious":   int,   number of engines flagging as malicious
+          "undetected":  int,
+          "harmless":    int,
+          "total":       int,
+          "permalink":   str,
+          "last_analysis_date": str | None
+        }
+    """
+    api_key = os.environ.get("VIRUSTOTAL_API_KEY", "")
+    if not api_key:
+        # Try Flask app config if we're in a request context
+        try:
+            from flask import current_app
+            api_key = current_app.config.get("VT_API_KEY", "")
+        except RuntimeError:
+            pass
+
+    if not api_key:
+        return None
+
+    try:
+        resp = _requests.get(
+            VT_HASH_URL.format(sha256),
+            headers={"x-apikey": api_key},
+            timeout=8
+        )
+        if resp.status_code == 404:
+            return {"malicious": 0, "undetected": 0, "harmless": 0,
+                    "total": 0, "permalink": "", "last_analysis_date": None,
+                    "note": "hash not found in VT database"}
+        if resp.status_code == 200:
+            data      = resp.json()
+            stats     = data.get("data", {}).get("attributes", {}).get(
+                "last_analysis_stats", {}
+            )
+            permalink = (
+                data.get("data", {}).get("links", {}).get("self", "") or
+                f"https://www.virustotal.com/gui/file/{sha256}"
+            )
+            last_date = data.get("data", {}).get("attributes", {}).get(
+                "last_analysis_date"
+            )
+            if last_date:
+                try:
+                    last_date = datetime.utcfromtimestamp(last_date).isoformat() + "Z"
+                except Exception:
+                    last_date = str(last_date)
+            return {
+                "malicious":          stats.get("malicious",   0),
+                "undetected":         stats.get("undetected",  0),
+                "harmless":           stats.get("harmless",    0),
+                "total":              sum(stats.values()) if stats else 0,
+                "permalink":          permalink,
+                "last_analysis_date": last_date,
+            }
+        logger.debug("VT API returned %s for %s", resp.status_code, sha256[:16])
+        return None
+    except Exception as e:
+        logger.debug("VT lookup failed: %s", e)
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW Step 8: Aggregate embedded URLs from all analysis types
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _collect_urls(pdf_analysis: dict, html_analysis: dict, zip_analysis: dict) -> list:
+    """Deduplicate and merge embedded URLs from all analysis types."""
+    seen = set()
+    urls = []
+    for source in (
+        pdf_analysis.get("embedded_urls",  []),
+        html_analysis.get("embedded_urls", []),
+        zip_analysis.get("embedded_urls",  []),
+    ):
+        for url in source:
+            if url and url not in seen:
+                seen.add(url)
+                urls.append(url)
+    return urls[:30]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 9: Verdict computation  (FIX: returns uppercase verdict strings)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_verdict(
-    yara_matches, static_findings, type_findings,
-    entropy, is_packed, file_type
+    yara_matches, static_findings,
+    pdf_analysis, macro_analysis, html_analysis,
+    zip_analysis, script_analysis, exe_analysis,
+    entropy, is_packed, file_type,
+    type_mismatch=False, known_bad=False
 ) -> tuple:
     """
-    Aggregate all analysis signals into a verdict and risk score.
+    Returns (verdict, risk_score, risk_flags, verdict_reasons).
 
-    Verdict thresholds:
-      0–29:  Clean
-      30–69: Suspicious
-      70–100:Malicious
-
-    Returns: (verdict: str, risk_score: float, risk_flags: list)
+    FIX: verdict is now uppercase — "CLEAN" / "SUSPICIOUS" / "MALICIOUS".
+    Previously returned title-case "Clean" which caused scan_router's
+    label_map.get("Clean") to fail and default every result to SUSPICIOUS.
     """
-    score = 0.0
-    flags = []
+    score   = 0.0
+    flags   = []
+    reasons = []
 
-    # ── YARA matches ───────────────────────────────────────────────────────
+    # Known bad (VirusTotal)
+    if known_bad:
+        score += 40
+        flags.append("VIRUSTOTAL_KNOWN_BAD")
+        reasons.append("Hash flagged by VirusTotal as malicious.")
+
+    # Type mismatch
+    if type_mismatch:
+        score += 25
+        flags.append("FILE_TYPE_MISMATCH")
+        reasons.append("File extension does not match magic bytes — possible disguise.")
+
+    # YARA matches
     severity_weights = {"CRITICAL": 30, "HIGH": 20, "MEDIUM": 12, "LOW": 5}
     for match in yara_matches:
         sev    = match.get("severity", "MEDIUM").upper()
         weight = severity_weights.get(sev, 10)
         score += weight
         flags.append(f"YARA:{match['rule']} ({sev})")
+        reasons.append(f"YARA rule matched: {match['rule']} ({sev})")
 
-    # ── Static string findings ─────────────────────────────────────────────
+    # Suspicious strings
     if len(static_findings) >= 3:
         score += 10
         flags.append(f"SUSPICIOUS_STRINGS ({len(static_findings)} found)")
+        reasons.append(f"{len(static_findings)} suspicious string(s) found in file.")
     elif len(static_findings) >= 1:
         score += 5
 
-    # ── Entropy ───────────────────────────────────────────────────────────
+    # Entropy
     if is_packed:
         score += 20
         flags.append(f"PACKED_EXECUTABLE (entropy={entropy:.2f})")
+        reasons.append(f"High entropy ({entropy:.2f}) — file may be packed or encrypted.")
     elif entropy >= ENTROPY_SUSPICIOUS:
         score += 10
         flags.append(f"HIGH_ENTROPY (entropy={entropy:.2f})")
+        reasons.append(f"Elevated entropy ({entropy:.2f}).")
 
-    # ── Type-specific findings ─────────────────────────────────────────────
+    # PDF
     if file_type == "pdf":
-        if type_findings.get("has_javascript"):
+        if pdf_analysis.get("has_javascript"):
             score += 15; flags.append("PDF_EMBEDDED_JAVASCRIPT")
-        if type_findings.get("has_launch"):
+            reasons.append("PDF contains embedded JavaScript.")
+        if pdf_analysis.get("has_launch"):
             score += 20; flags.append("PDF_LAUNCH_ACTION")
-        if type_findings.get("has_openaction"):
+            reasons.append("PDF has a Launch action — can execute external programs.")
+        if pdf_analysis.get("has_openaction"):
             score += 10; flags.append("PDF_OPENACTION")
+            reasons.append("PDF has an OpenAction that runs on open.")
 
-    elif file_type in ("docx", "xlsx", "pptx", "ole"):
-        if type_findings.get("has_macros"):
+    # Office macros
+    if file_type in ("docx", "xlsx", "pptx", "ole", "doc", "xls"):
+        if macro_analysis.get("has_macros"):
             score += 15; flags.append("OFFICE_MACRO_DETECTED")
-        if type_findings.get("nested_executables"):
+            reasons.append("VBA macro detected in Office document.")
+        if zip_analysis.get("nested_executables"):
             score += 25; flags.append("EXECUTABLE_IN_OFFICE_DOC")
-        if type_findings.get("external_rels"):
+            reasons.append("Executable file embedded inside Office document.")
+        if zip_analysis.get("external_rels"):
             score += 10; flags.append("EXTERNAL_RELATIONSHIP_URL")
+            reasons.append("Office document references external URL in relationships.")
+        if zip_analysis.get("is_password_protected"):
+            score += 5; flags.append("PASSWORD_PROTECTED_ARCHIVE")
+            reasons.append("Archive is password-protected — content cannot be fully scanned.")
 
+    # HTML
     elif file_type in ("html", "htm"):
-        if type_findings.get("has_password_field") and type_findings.get("has_form_with_action"):
+        if html_analysis.get("has_password_field") and html_analysis.get("has_form_with_action"):
             score += 20; flags.append("CREDENTIAL_HARVESTING_FORM")
-        if type_findings.get("has_hidden_iframe"):
+            reasons.append("HTML contains a login form with password field.")
+        if html_analysis.get("has_hidden_iframe"):
             score += 15; flags.append("HIDDEN_IFRAME")
-        if type_findings.get("has_obfuscated_js"):
+            reasons.append("Hidden iframe detected in HTML.")
+        if html_analysis.get("has_obfuscated_js"):
             score += 10; flags.append("OBFUSCATED_JAVASCRIPT")
+            reasons.append("Obfuscated JavaScript detected.")
 
-    elif file_type in ("js", "script"):
-        obs_score = type_findings.get("obfuscation_score", 0)
-        if obs_score >= 4:
+    # Script
+    elif file_type in ("js", "script", "ps1", "vbs", "bat"):
+        obs = script_analysis.get("obfuscation_score", 0)
+        if obs >= 4:
             score += 15; flags.append("HEAVILY_OBFUSCATED_SCRIPT")
-        elif obs_score >= 2:
+            reasons.append("Script is heavily obfuscated.")
+        elif obs >= 2:
             score += 8;  flags.append("OBFUSCATED_SCRIPT")
-        if type_findings.get("has_download") and type_findings.get("has_exec"):
+        if script_analysis.get("has_download") and script_analysis.get("has_exec"):
             score += 20; flags.append("DOWNLOAD_AND_EXECUTE_PATTERN")
+            reasons.append("Script contains download-and-execute pattern.")
 
+    # Executable
     elif file_type in ("exe", "elf", "dll"):
-        if type_findings.get("has_upx"):
+        if exe_analysis.get("has_upx"):
             score += 10; flags.append("UPX_PACKED_EXECUTABLE")
-        if type_findings.get("has_suspicious_imports"):
+            reasons.append("UPX packer signature detected.")
+        if exe_analysis.get("has_suspicious_imports"):
             score += 15; flags.append("SUSPICIOUS_API_IMPORTS")
+            reasons.append("Suspicious Windows API imports found.")
 
-    # ── Cap and determine verdict ─────────────────────────────────────────
     risk_score = round(min(score, 100.0), 2)
 
+    # FIX: uppercase verdicts to match scan_router label_map
     if risk_score >= 70:
-        verdict = "Malicious"
+        verdict = "MALICIOUS"
     elif risk_score >= 30:
-        verdict = "Suspicious"
+        verdict = "SUSPICIOUS"
     else:
-        verdict = "Clean"
+        verdict = "CLEAN"
 
-    return verdict, risk_score, flags
+    if not reasons:
+        reasons.append(f"File '{file_type}' passed all checks — no indicators found.")
+
+    return verdict, risk_score, flags, reasons
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1015,22 +1098,32 @@ def _compute_verdict(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _error_result(filename: str, message: str) -> dict:
-    """Return a minimal error result when analysis cannot proceed."""
     return {
-        "filename":        filename,
-        "file_type":       "unknown",
-        "file_category":   "unknown",
-        "file_size":       0,
-        "hashes":          {"md5": "", "sha1": "", "sha256": ""},
-        "entropy":         0.0,
-        "is_packed":       False,
-        "is_high_entropy": False,
-        "yara_matches":    [],
-        "static_findings": [],
-        "type_findings":   {},
-        "verdict":         "Unknown",
-        "risk_score":      0.0,
-        "risk_flags":      ["ANALYSIS_ERROR"],
-        "analyzed_at":     datetime.utcnow().isoformat() + "Z",
-        "error":           message
+        "filename":          filename,
+        "file_type":         "unknown",
+        "file_category":     "unknown",
+        "file_size":         0,
+        "hashes":            {"md5": "", "sha1": "", "sha256": ""},
+        "entropy":           0.0,
+        "is_packed":         False,
+        "is_high_entropy":   False,
+        "type_mismatch":     False,
+        "yara_matches":      [],
+        "static_findings":   [],
+        "suspicious_strings":[],
+        "pdf_analysis":      {},
+        "macro_analysis":    {},
+        "html_analysis":     {},
+        "zip_analysis":      {},
+        "script_analysis":   {},
+        "exe_analysis":      {},
+        "embedded_urls":     [],
+        "vt_result":         None,
+        "known_bad":         False,
+        "verdict":           "UNKNOWN",
+        "risk_score":        0.0,
+        "risk_flags":        ["ANALYSIS_ERROR"],
+        "verdict_reasons":   [message],
+        "analyzed_at":       datetime.utcnow().isoformat() + "Z",
+        "error":             message
     }

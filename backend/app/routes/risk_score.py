@@ -2,6 +2,10 @@
 backend/app/routes/risk_score.py
 Phase 10 — Risk Score Aggregator Flask blueprint
 Variable name: risk_score_bp  |  url_prefix: /risk
+
+ADDED:
+  GET  /risk/status         — probe all module tables, return online/offline status
+  POST /risk/aggregate/auto — auto-pull most recent scan per module + aggregate
 """
 
 import logging
@@ -24,6 +28,7 @@ def index():
     return render_template("risk_score.html")
 
 
+# ── Manual aggregate (existing) ───────────────────────────────────────────────
 @risk_score_bp.route("/aggregate", methods=["POST"])
 def aggregate():
     payload = request.get_json(silent=True) or {}
@@ -54,6 +59,49 @@ def aggregate():
         return jsonify({"status": "error", "message": str(ex)}), 502
 
 
+# ── Auto aggregate (NEW) ──────────────────────────────────────────────────────
+@risk_score_bp.route("/aggregate/auto", methods=["POST"])
+def aggregate_auto():
+    """
+    Proxy to FastAPI /api/risk/aggregate/auto.
+    No body required — backend pulls most recent scan per module automatically.
+    Optional body: {"weights": {...}} to override default weights.
+    """
+    payload = request.get_json(silent=True) or {}
+    try:
+        resp = http_requests.post(
+            f"{_api()}/api/risk/aggregate/auto",
+            json=payload,
+            timeout=PROXY_TIMEOUT,
+        )
+        return jsonify(resp.json()), resp.status_code
+    except http_requests.exceptions.Timeout:
+        return jsonify({"status": "error", "message": "Auto aggregation timed out"}), 504
+    except Exception as ex:
+        logger.error("Risk auto-aggregate proxy error: %s", ex)
+        return jsonify({"status": "error", "message": str(ex)}), 502
+
+
+# ── Module status probe (NEW) ─────────────────────────────────────────────────
+@risk_score_bp.route("/status", methods=["GET"])
+def status():
+    """
+    Proxy to FastAPI /api/risk/status.
+    Returns online/offline status + latest scan metadata for all six modules.
+    Consumed by the auto-mode status grid in the frontend.
+    """
+    try:
+        resp = http_requests.get(
+            f"{_api()}/api/risk/status",
+            timeout=PROXY_TIMEOUT,
+        )
+        return jsonify(resp.json()), resp.status_code
+    except Exception as ex:
+        logger.error("Risk status proxy error: %s", ex)
+        return jsonify({"status": "error", "message": str(ex)}), 502
+
+
+# ── History (existing) ────────────────────────────────────────────────────────
 @risk_score_bp.route("/history")
 def history():
     limit = request.args.get("limit", 20)

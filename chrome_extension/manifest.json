@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "PhishGuard — URL Threat Scanner",
+  "name": "Mahoraga Sentinel — URL Threat Scanner",
   "version": "1.0.0",
   "description": "Real-time phishing and malware URL detection powered by PhishGuard AI.",
 

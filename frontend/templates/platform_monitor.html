@@ -24,7 +24,7 @@
   </p>
 </div>
 
-<!-- ── Alert banner (shown when alerts fire during polling) ───────────────── -->
+<!-- ── Alert banner ───────────────────────────────────────────────────────── -->
 <div class="pm-alert-banner" id="pmAlertBanner" style="display:none">
   <span class="pm-alert-icon">🚨</span>
   <span id="pmAlertText"></span>
@@ -102,69 +102,85 @@
   </div>
 </div>
 
-<!-- ── Risk score history chart (shown when a target is selected) ─────────── -->
-<div class="card pm-history-card" id="pmHistoryCard" style="display:none">
-  <div class="card-header">
-    <span class="card-icon">📈</span>
-    <span class="card-title">
-      Risk Score History —
-      <span id="pmHistoryLabel"></span>
-    </span>
-    <button class="pm-close-btn" id="pmHistoryClose">✕ Close</button>
-  </div>
-  <div class="card-body">
-    <canvas id="pmHistoryChart" height="80"></canvas>
-    <div class="pm-history-stats">
-      <div class="ai-stat">
-        <span class="ai-stat-label">Scans</span>
-        <span class="ai-stat-val" id="pmHistTotal">—</span>
-      </div>
-      <div class="ai-stat">
-        <span class="ai-stat-label">Avg Risk</span>
-        <span class="ai-stat-val" id="pmHistAvg">—</span>
-      </div>
-      <div class="ai-stat">
-        <span class="ai-stat-label">Alerts Fired</span>
-        <span class="ai-stat-val pm-stat-alert" id="pmHistAlerts">—</span>
-      </div>
-      <div class="ai-stat">
-        <span class="ai-stat-label">Last Verdict</span>
-        <span class="ai-stat-val" id="pmHistVerdict">—</span>
-      </div>
-    </div>
-  </div>
-</div>
+<!-- ── Chart + Feed side-by-side (50/50) ─────────────────────────────────── -->
+<div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:20px">
 
-<!-- ── Unified threat feed ────────────────────────────────────────────────── -->
-<div class="card">
-  <div class="card-header">
-    <span class="card-icon">🌊</span>
-    <span class="card-title">Unified Threat Feed</span>
-    <span class="att-poll-indicator">● LIVE</span>
-  </div>
-  <div class="card-body" style="padding:0">
-    <div class="table-wrapper">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Module</th>
-            <th>Reference</th>
-            <th>Risk Score</th>
-            <th>Verdict</th>
-            <th>Scanned</th>
-          </tr>
-        </thead>
-        <tbody id="pmFeedBody">
-          <tr>
-            <td colspan="5" class="att-empty-row">
-              Loading threat feed…
-            </td>
-          </tr>
-        </tbody>
-      </table>
+  <!-- LEFT: Risk score plot chart (50%) -->
+  <div class="card pm-history-card" id="pmHistoryCard"
+       style="flex:1;min-width:0">
+    <div class="card-header">
+      <span class="card-icon">📈</span>
+      <span class="card-title" id="pmHistoryTitle">
+        Risk Score — All Targets
+      </span>
+      <button class="pm-close-btn" id="pmHistoryClose"
+              style="display:none" title="Back to overview">
+        ← Overview
+      </button>
+    </div>
+    <div class="card-body">
+      <div id="pmChartEmpty" style="
+        text-align:center;padding:40px 0;
+        color:#8b949e;font-size:13px;display:none">
+        No watchlist targets yet. Add a target above to start tracking.
+      </div>
+      <canvas id="pmHistoryChart"></canvas>
+      <div class="pm-history-stats" id="pmHistoryStats"
+           style="margin-top:10px">
+        <div class="ai-stat">
+          <span class="ai-stat-label">Targets</span>
+          <span class="ai-stat-val" id="pmHistTotal">—</span>
+        </div>
+        <div class="ai-stat">
+          <span class="ai-stat-label">Avg Risk</span>
+          <span class="ai-stat-val" id="pmHistAvg">—</span>
+        </div>
+        <div class="ai-stat">
+          <span class="ai-stat-label">Alerts Fired</span>
+          <span class="ai-stat-val pm-stat-alert" id="pmHistAlerts">—</span>
+        </div>
+        <div class="ai-stat">
+          <span class="ai-stat-label">Peak Risk</span>
+          <span class="ai-stat-val" id="pmHistVerdict">—</span>
+        </div>
+      </div>
     </div>
   </div>
-</div>
+
+  <!-- RIGHT: Unified threat feed (50%) -->
+  <div class="card" style="flex:1;min-width:0">
+    <div class="card-header">
+      <span class="card-icon">🌊</span>
+      <span class="card-title">Unified Threat Feed</span>
+      <span class="att-poll-indicator">● LIVE</span>
+      <span id="pmFeedMeta" style="
+        margin-left:auto;font-size:11px;color:#8b949e"></span>
+    </div>
+    <div class="card-body" style="padding:0">
+      <div style="
+        max-height:320px;overflow-y:auto;
+        scrollbar-width:thin;scrollbar-color:#30363d transparent">
+        <table class="data-table" style="font-size:12px">
+          <thead style="position:sticky;top:0;z-index:1;background:#161b22">
+            <tr>
+              <th style="width:100px">Module</th>
+              <th>Reference</th>
+              <th style="width:52px">Risk</th>
+              <th style="width:80px">Verdict</th>
+              <th style="width:100px">Scanned</th>
+            </tr>
+          </thead>
+          <tbody id="pmFeedBody">
+            <tr>
+              <td colspan="5" class="att-empty-row">Loading…</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /flex row -->
 {% endblock %}
 
 {% block scripts %}

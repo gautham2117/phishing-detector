@@ -280,6 +280,69 @@ def _check_authorization(target: str, consent_confirmed: bool) -> tuple[bool, st
     # All layers passed
     return True, "authorized_via_env_and_consent"
 
+# backend/modules/network_scanner.py
+# [Previous code remains the same until _check_authorization function]
+
+def _check_authorization(target: str, consent_confirmed: bool) -> tuple[bool, str]:
+    """
+    Multi-layer authorization check before any scan is run.
+
+    Layer 1: Is the target in the hardcoded demo allowlist?
+    Layer 2: Is the SCAN_AUTHORIZED environment variable set to "1"?
+    Layer 3: Was consent_confirmed=True passed by the caller?
+
+    All three layers must pass for non-allowlisted targets.
+    Demo targets (localhost, scanme.nmap.org) only need layer 1.
+
+    Returns: (authorized: bool, reason: str)
+    """
+
+    # Normalize — strip protocol prefixes if user pasted a URL
+    clean_target = (
+        target
+        .replace("https://", "")
+        .replace("http://", "")
+        .split("/")[0]       # strip path
+        .split(":")[0]       # strip port
+        .lower()
+        .strip()
+    )
+
+    # Layer 1: Demo allowlist — always authorized
+    if clean_target in AUTHORIZED_DEMO_TARGETS:
+        return True, "demo_target_allowlisted"
+
+    # --------------------------------------------------------------
+    # FIX 3: More helpful error messages
+    # Tell the user exactly what's missing
+    # --------------------------------------------------------------
+
+    # Layer 2: Check for the opt-in environment variable
+    scan_authorized_env = os.environ.get("SCAN_AUTHORIZED", "0")
+    if scan_authorized_env != "1":
+        return False, (
+            "SCAN_AUTHORIZED environment variable not set.\n\n"
+            "To scan non‑demo targets, you must:\n"
+            "1. Add SCAN_AUTHORIZED=1 to your .env file\n"
+            "2. Restart the FastAPI server\n\n"
+            "⚠️  Only do this for domains you own or have "
+            "explicit written permission to scan."
+        )
+
+    # Layer 3: Explicit consent from the caller
+    if not consent_confirmed:
+        return False, (
+            "Consent not confirmed.\n\n"
+            "To scan this target, you must:\n"
+            "1. Check the consent confirmation box in the UI\n"
+            "2. Ensure you have written authorization to scan this domain"
+        )
+
+    # All layers passed
+    return True, "authorized_via_env_and_consent"
+
+# [Rest of the file remains unchanged]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # IP resolution

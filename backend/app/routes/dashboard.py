@@ -160,7 +160,6 @@ def _all_sidebar_items():
             "items": [
                 {"label": "Platform Monitor","url": "/platform/",     "icon": "📡"},
                 {"label": "Risk Score",      "url": "/risk/",         "icon": "⚖"},
-                {"label": "Live Monitor",    "url": "/monitor/",      "icon": "📺"},
                 {"label": "Alerts & Audit",  "url": "/alerts/",       "icon": "🚨"},
                 {"label": "Extension",       "url": "/extension/",    "icon": "🧩"},
             ],
