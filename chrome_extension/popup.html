@@ -1,43 +1,469 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PhishGuard</title>
-  <link rel="stylesheet" href="popup.css">
+<meta charset="UTF-8">
+<title>MAHORAGA</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:     #070b10;
+    --bg2:    #0c1119;
+    --bg3:    #111827;
+    --panel:  #0e1520;
+    --border: #1c2a3a;
+    --text:   #c8daf0;
+    --muted:  #4a6080;
+    --accent: #1e90ff;
+    --safe:   #00e676;
+    --warn:   #ffab00;
+    --danger: #ff3d3d;
+    --w:      340px;
+  }
+
+  body {
+    width: var(--w);
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Rajdhani', 'Segoe UI', sans-serif;
+    font-size: 14px;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* scanline texture */
+  body::after {
+    content: ''; position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 2px,
+      rgba(0,0,0,.07) 2px, rgba(0,0,0,.07) 4px
+    );
+    pointer-events: none; z-index: 9998;
+  }
+
+  /* ══════════════════════════════════════════════════════
+     SCANNING OVERLAY
+     ══════════════════════════════════════════════════════ */
+  #scanOverlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(7, 11, 16, .94);
+    backdrop-filter: blur(2px);
+    z-index: 9000;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+  }
+  #scanOverlay.active { display: flex; }
+
+  /* rotating radar ring */
+  .radar-ring {
+    position: relative;
+    width: 80px; height: 80px;
+  }
+  .radar-ring svg {
+    width: 80px; height: 80px;
+    animation: radar-spin 1.4s linear infinite;
+    transform-origin: center;
+  }
+  @keyframes radar-spin { to { transform: rotate(360deg); } }
+
+  .radar-pivot {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent), 0 0 22px rgba(30,144,255,.4);
+    animation: pivot-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pivot-pulse {
+    0%,100% { transform: translate(-50%,-50%) scale(1);   opacity: 1; }
+    50%     { transform: translate(-50%,-50%) scale(1.45); opacity: .65; }
+  }
+
+  /* outer glow rings */
+  .radar-glow {
+    position: absolute; top: 50%; left: 50%;
+    border-radius: 50%;
+    border: 1px solid rgba(30,144,255,.2);
+    animation: ring-expand 2.8s ease-out infinite;
+    pointer-events: none;
+  }
+  .radar-glow:nth-child(2) { animation-delay: .9s; }
+  .radar-glow:nth-child(3) { animation-delay: 1.8s; }
+  @keyframes ring-expand {
+    0%   { width: 10px; height: 10px; margin: -5px; opacity: .9; }
+    100% { width: 96px; height: 96px; margin: -48px; opacity: 0; }
+  }
+
+  .overlay-title {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: .76rem;
+    letter-spacing: .2em;
+    color: var(--accent);
+    text-transform: uppercase;
+    animation: text-blink 2s ease-in-out infinite;
+  }
+  @keyframes text-blink {
+    0%,100% { opacity: 1; }
+    48%     { opacity: 1; }
+    50%     { opacity: .4; }
+    52%     { opacity: 1; }
+  }
+
+  /* scrolling log lines */
+  .scan-log {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: .6rem;
+    color: var(--muted);
+    text-align: center;
+    line-height: 1.9;
+    min-height: 52px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .scan-log .log-line {
+    animation: log-in .35s ease-out;
+  }
+  @keyframes log-in {
+    from { opacity: 0; transform: translateY(5px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  /* last line is brighter */
+  .scan-log .log-line:last-child { color: #7a9abd; }
+
+  /* progress bar */
+  .scan-prog-wrap {
+    width: 190px; height: 3px;
+    background: var(--border); border-radius: 2px; overflow: hidden;
+  }
+  .scan-prog-fill {
+    height: 100%; width: 0%; border-radius: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+  }
+  /* indeterminate shimmer used while no known endpoint */
+  .scan-prog-fill.indeterminate {
+    width: 40%;
+    animation: prog-shimmer 1.6s ease-in-out infinite;
+  }
+  @keyframes prog-shimmer {
+    0%   { transform: translateX(-180%); }
+    100% { transform: translateX(450%); }
+  }
+
+  /* ══════════════════════════════════════════════════════
+     HEADER
+     ══════════════════════════════════════════════════════ */
+  .hdr {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 14px 10px;
+    background: var(--bg2); border-bottom: 1px solid var(--border);
+    position: relative; overflow: hidden;
+  }
+  .hdr::before {
+    content: ''; position: absolute; top: 4px; left: 4px;
+    width: 14px; height: 14px; opacity: .4;
+    border: 2px solid transparent;
+    border-top-color: var(--accent); border-left-color: var(--accent);
+  }
+  .hdr::after {
+    content: ''; position: absolute; bottom: 4px; right: 4px;
+    width: 14px; height: 14px; opacity: .4;
+    border: 2px solid transparent;
+    border-bottom-color: var(--accent); border-right-color: var(--accent);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-sigil {
+    width: 34px; height: 34px;
+    background: radial-gradient(circle at 40% 35%, #1a3a6a, #040810);
+    border: 1px solid rgba(30,144,255,.35); border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    box-shadow: 0 0 16px rgba(30,144,255,.2), inset 0 0 10px rgba(30,144,255,.08);
+    position: relative; flex-shrink: 0;
+  }
+  .brand-sigil::before {
+    content: ''; position: absolute; inset: -4px; border-radius: 10px;
+    border: 1px solid rgba(30,144,255,.2);
+    animation: sigil-ring 3s ease-in-out infinite;
+  }
+  @keyframes sigil-ring {
+    0%,100% { opacity: .2; transform: scale(1);    }
+    50%     { opacity: .6; transform: scale(1.06); }
+  }
+  .brand-label  { line-height: 1.15; }
+  .brand-name   { font-size: 1.05rem; font-weight: 700; letter-spacing: .18em; color: var(--accent); text-shadow: 0 0 18px rgba(30,144,255,.55); text-transform: uppercase; }
+  .brand-sub    { font-family: 'Share Tech Mono', monospace; font-size: .58rem; color: var(--muted); letter-spacing: .1em; }
+  .hdr-right    { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  .ver-tag      { font-family: 'Share Tech Mono', monospace; font-size: .58rem; color: var(--muted); background: var(--bg3); border: 1px solid var(--border); border-radius: 3px; padding: 1px 6px; }
+
+  /* ══════════════════════════════════════════════════════
+     STATUS STRIP
+     ══════════════════════════════════════════════════════ */
+  .status-strip {
+    display: flex; align-items: center; gap: 7px;
+    padding: 5px 14px;
+    background: rgba(0,0,0,.35); border-bottom: 1px solid var(--border);
+  }
+  .s-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; transition: background .4s, box-shadow .4s; }
+  .s-dot.online  { background: var(--safe);   box-shadow: 0 0 7px var(--safe);   animation: blink-dot 2.5s ease-in-out infinite; }
+  .s-dot.offline { background: var(--danger); box-shadow: 0 0 7px var(--danger); }
+  @keyframes blink-dot {
+    0%,100% { box-shadow: 0 0 5px var(--safe); }
+    50%     { box-shadow: 0 0 12px var(--safe), 0 0 22px rgba(0,230,118,.3); }
+  }
+  .s-text { font-family: 'Share Tech Mono', monospace; font-size: .65rem; color: var(--muted); }
+
+  /* ══════════════════════════════════════════════════════
+     SPEEDOMETER GAUGE
+     ══════════════════════════════════════════════════════ */
+  .gauge-wrap {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 14px 14px 14px;
+    background: linear-gradient(180deg, #090f18 0%, var(--bg) 100%);
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+  .gauge-wrap::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(30,144,255,.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(30,144,255,.04) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+  /* SVG container — sized to the exact viewBox 260×150 */
+  .gauge-svg-wrap {
+    position: relative;
+    width: 260px; height: 145px;
+    z-index: 1; flex-shrink: 0;
+  }
+  #meterSvg {
+    position: absolute; top: 0; left: 0;
+    width: 260px; height: 150px;
+    overflow: visible;
+  }
+  .gauge-readout {
+    position: absolute; bottom: 0; left: 50%;
+    transform: translateX(-50%);
+    text-align: center; pointer-events: none; z-index: 2; white-space: nowrap;
+  }
+  .gauge-num   { font-size: 2.1rem; font-weight: 700; line-height: 1; transition: color .5s; font-family: 'Rajdhani', sans-serif; letter-spacing: -.02em; }
+  .gauge-denom { font-family: 'Share Tech Mono', monospace; font-size: .58rem; color: var(--muted); letter-spacing: .06em; }
+
+  .verdict-wrap { display: flex; align-items: center; gap: 8px; margin-top: 8px; z-index: 1; }
+  .verdict-pill {
+    font-family: 'Rajdhani', sans-serif; font-size: .78rem; font-weight: 700;
+    padding: 4px 18px; border-radius: 20px; letter-spacing: .1em; text-transform: uppercase;
+    border: 1px solid; transition: all .4s;
+  }
+  .v-safe       { color: var(--safe);   border-color: rgba(0,230,118,.4);  background: rgba(0,230,118,.08); }
+  .v-suspicious { color: var(--warn);   border-color: rgba(255,171,0,.4);  background: rgba(255,171,0,.08); }
+  .v-malicious  { color: var(--danger); border-color: rgba(255,61,61,.4);  background: rgba(255,61,61,.08); box-shadow: 0 0 14px rgba(255,61,61,.2); }
+  .v-unknown    { color: var(--muted);  border-color: var(--border);       background: transparent; }
+
+  /* ══════════════════════════════════════════════════════
+     AUTO-SCAN TOGGLE
+     ══════════════════════════════════════════════════════ */
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 14px;
+    background: var(--bg3); border-bottom: 1px solid var(--border);
+  }
+  .toggle-label {
+    font-family: 'Share Tech Mono', monospace; font-size: .65rem;
+    color: var(--muted); letter-spacing: .06em;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .toggle-switch { position: relative; width: 42px; height: 22px; cursor: pointer; flex-shrink: 0; }
+  .toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .toggle-track {
+    position: absolute; inset: 0; border-radius: 11px;
+    background: var(--bg2); border: 1px solid var(--border);
+    transition: background .25s, border-color .25s, box-shadow .25s;
+  }
+  .toggle-thumb {
+    position: absolute; top: 3px; left: 3px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--muted);
+    transition: transform .25s, background .25s, box-shadow .25s;
+  }
+  .toggle-switch input:checked ~ .toggle-track { background: rgba(0,230,118,.15); border-color: rgba(0,230,118,.5); box-shadow: 0 0 8px rgba(0,230,118,.2); }
+  .toggle-switch input:checked ~ .toggle-thumb { transform: translateX(20px); background: var(--safe); box-shadow: 0 0 6px var(--safe); }
+  .toggle-state-lbl { font-family: 'Share Tech Mono', monospace; font-size: .6rem; letter-spacing: .06em; min-width: 28px; text-align: right; transition: color .25s; }
+
+  /* ══════════════════════════════════════════════════════
+     THREAT INTEL PANEL
+     ══════════════════════════════════════════════════════ */
+  .intel-panel { padding: 11px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .intel-label { font-family: 'Share Tech Mono', monospace; font-size: .58rem; letter-spacing: .1em; color: var(--muted); margin-bottom: 5px; text-transform: uppercase; }
+  .intel-url   { font-family: 'Share Tech Mono', monospace; font-size: .68rem; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 5px; }
+  .intel-summary { font-size: .82rem; color: #7a9abd; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+  /* ══════════════════════════════════════════════════════
+     ACTION ROW
+     ══════════════════════════════════════════════════════ */
+  .action-row { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--bg2); }
+  .action-icon { font-size: 14px; }
+  .action-text { font-size: .8rem; font-weight: 600; letter-spacing: .04em; transition: color .4s; }
+
+  /* ══════════════════════════════════════════════════════
+     BUTTON ROW  — Scan | Reset | Dashboard
+     ══════════════════════════════════════════════════════ */
+  .btn-row { display: flex; gap: 7px; padding: 10px 14px; background: var(--bg2); }
+
+  .btn {
+    flex: 1; padding: 9px 6px; border-radius: 5px;
+    font-family: 'Rajdhani', sans-serif; font-size: .78rem; font-weight: 700;
+    letter-spacing: .07em; text-transform: uppercase;
+    cursor: pointer; border: 1px solid var(--border); background: var(--bg3); color: var(--muted);
+    display: flex; align-items: center; justify-content: center; gap: 4px;
+    transition: all .15s; position: relative; overflow: hidden; white-space: nowrap;
+  }
+  .btn::before { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(255,255,255,.04) 0%, transparent 60%); pointer-events: none; }
+  .btn:hover:not(:disabled)  { border-color: var(--accent); color: var(--text); }
+  .btn:active:not(:disabled) { transform: scale(.97); }
+  .btn:disabled              { opacity: .45; cursor: not-allowed; }
+
+  .btn-scan {
+    background: linear-gradient(135deg, #0e2a52, #0a1a38);
+    border-color: rgba(30,144,255,.5); color: var(--accent);
+    box-shadow: 0 0 14px rgba(30,144,255,.15), inset 0 1px 0 rgba(30,144,255,.15);
+  }
+  .btn-scan:hover:not(:disabled) { background: linear-gradient(135deg, #122f5a, #0c2040); box-shadow: 0 0 20px rgba(30,144,255,.3); }
+
+  .btn-reset { border-color: rgba(255,171,0,.22); color: rgba(255,171,0,.5); }
+  .btn-reset:hover:not(:disabled) { border-color: rgba(255,171,0,.6); color: var(--warn); background: rgba(255,171,0,.06); }
+
+  @keyframes reset-confirm {
+    0%   { border-color: var(--warn); color: var(--warn); box-shadow: 0 0 14px rgba(255,171,0,.4); }
+    100% { border-color: rgba(255,171,0,.22); color: rgba(255,171,0,.5); box-shadow: none; }
+  }
+  .btn-reset.confirming { animation: reset-confirm .55s ease-out; }
+</style>
 </head>
 <body>
 
-<div class="pg-header">
-  <div class="pg-logo">🛡 PhishGuard</div>
-  <div class="pg-version">v1.0.0</div>
-</div>
+<!-- ══════════════════════════ SCANNING OVERLAY ══════════════════════════ -->
+<div id="scanOverlay">
 
-<div class="pg-status-row">
-  <span class="pg-status-dot" id="pgStatusDot"></span>
-  <span class="pg-status-text" id="pgStatusText">Checking backend…</span>
-</div>
-
-<div class="pg-card" id="pgResultCard">
-  <div class="pg-label-row">
-    <span class="pg-verdict-badge" id="pgVerdictBadge">—</span>
-    <span class="pg-score"         id="pgScore">—</span>
+  <!-- animated radar with expanding glow rings -->
+  <div class="radar-ring">
+    <div class="radar-glow"></div>
+    <div class="radar-glow"></div>
+    <div class="radar-glow"></div>
+    <svg viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="40" cy="40" r="36" stroke="rgba(30,144,255,.12)" stroke-width="1.5"/>
+      <circle cx="40" cy="40" r="24" stroke="rgba(30,144,255,.08)" stroke-width="1"/>
+      <circle cx="40" cy="40" r="12" stroke="rgba(30,144,255,.06)" stroke-width="1"/>
+      <!-- sweeping blade -->
+      <path d="M40 4 A36 36 0 0 1 76 40" stroke="url(#sg)" stroke-width="3.5" stroke-linecap="round"/>
+      <path d="M40 4 A36 36 0 0 1 67 18" stroke="rgba(30,144,255,.35)" stroke-width="2" stroke-linecap="round"/>
+      <defs>
+        <linearGradient id="sg" x1="40" y1="4" x2="76" y2="40" gradientUnits="userSpaceOnUse">
+          <stop offset="0%"   stop-color="#1e90ff" stop-opacity="0"/>
+          <stop offset="100%" stop-color="#1e90ff"/>
+        </linearGradient>
+      </defs>
+    </svg>
+    <div class="radar-pivot"></div>
   </div>
-  <div class="pg-bar-bg">
-    <div class="pg-bar-fill" id="pgBarFill" style="width:0%"></div>
+
+  <div class="overlay-title" id="overlayTitle">SCANNING TARGET</div>
+
+  <div class="scan-log" id="scanLog">
+    <div class="log-line">INITIALIZING MODULES...</div>
   </div>
-  <div class="pg-url"     id="pgUrl">No scan yet.</div>
-  <div class="pg-summary" id="pgSummary"></div>
-  <div class="pg-action"  id="pgAction"></div>
+
+  <div class="scan-prog-wrap">
+    <div class="scan-prog-fill indeterminate" id="scanProgFill"></div>
+  </div>
 </div>
 
-<div class="pg-actions">
-  <button class="pg-btn pg-btn-scan" id="pgScanBtn">
-    🔍 Scan This Page
-  </button>
-  <button class="pg-btn pg-btn-dashboard" id="pgDashBtn">
-    📊 Open Dashboard
-  </button>
+<!-- ══════════════════════════ HEADER ══════════════════════════ -->
+<div class="hdr">
+  <div class="brand">
+    <div class="brand-sigil">⚔</div>
+    <div class="brand-label">
+      <div class="brand-name">Mahoraga</div>
+      <div class="brand-sub">ADAPTIVE THREAT SCANNER</div>
+    </div>
+  </div>
+  <div class="hdr-right"><div class="ver-tag">v1.0.0</div></div>
+</div>
+
+<!-- STATUS STRIP -->
+<div class="status-strip">
+  <span class="s-dot" id="pgStatusDot"></span>
+  <span class="s-text" id="pgStatusText">INITIALIZING...</span>
+</div>
+
+<!-- SPEEDOMETER GAUGE -->
+<div class="gauge-wrap">
+  <div class="gauge-svg-wrap">
+    <svg id="meterSvg" viewBox="0 0 260 150" xmlns="http://www.w3.org/2000/svg">
+      <!-- zone track arcs — paths set by JS -->
+      <path id="trackSafe"   fill="none" stroke="#00e676" stroke-width="12" stroke-linecap="butt" opacity=".18"/>
+      <path id="trackWarn"   fill="none" stroke="#ffab00" stroke-width="12" stroke-linecap="butt" opacity=".18"/>
+      <path id="trackDanger" fill="none" stroke="#ff3d3d" stroke-width="12" stroke-linecap="butt" opacity=".18"/>
+      <!-- live progress arc -->
+      <path id="arcProgress" fill="none" stroke="#00e676" stroke-width="12" stroke-linecap="round" opacity=".92"/>
+      <!-- tick marks and labels — appended by JS -->
+      <g id="ticks"      stroke="rgba(200,218,240,.28)" stroke-width="1.5"/>
+      <g id="tickLabels" font-family="'Share Tech Mono',monospace" font-size="8"
+         fill="rgba(200,218,240,.4)" text-anchor="middle" dominant-baseline="middle"/>
+      <!-- needle — endpoints set by JS -->
+      <line id="needle"     stroke="rgba(220,235,255,.92)" stroke-width="2.5" stroke-linecap="round"/>
+      <line id="needleTail" stroke="rgba(220,235,255,.35)" stroke-width="2"   stroke-linecap="round"/>
+      <!-- pivot (always on top) -->
+      <circle cx="130" cy="138" r="7"   fill="#0c1420" stroke="rgba(200,218,240,.5)" stroke-width="1.5"/>
+      <circle cx="130" cy="138" r="2.5" fill="rgba(220,235,255,.8)"/>
+    </svg>
+    <div class="gauge-readout">
+      <div class="gauge-num" id="pgScore" style="color:var(--muted)">—</div>
+      <div class="gauge-denom">/ 100</div>
+    </div>
+  </div>
+  <div class="verdict-wrap">
+    <div class="verdict-pill v-unknown" id="pgVerdict">NO SCAN</div>
+  </div>
+</div>
+
+<!-- AUTO-SCAN TOGGLE -->
+<div class="toggle-row">
+  <div class="toggle-label">⬡&nbsp; AUTO-SCAN ON NAVIGATE</div>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span class="toggle-state-lbl" id="toggleLbl" style="color:var(--muted)">OFF</span>
+    <label class="toggle-switch">
+      <input type="checkbox" id="autoScanToggle">
+      <span class="toggle-track"></span>
+      <span class="toggle-thumb"></span>
+    </label>
+  </div>
+</div>
+
+<!-- THREAT INTEL -->
+<div class="intel-panel">
+  <div class="intel-label">// AI THREAT ANALYSIS</div>
+  <div class="intel-url"     id="pgUrl">awaiting scan target...</div>
+  <div class="intel-summary" id="pgSummary">Navigate to a page or click SCAN to begin threat assessment.</div>
+</div>
+
+<!-- ACTION -->
+<div class="action-row">
+  <span class="action-icon" id="pgActionIcon">◈</span>
+  <span class="action-text" id="pgAction" style="color:var(--muted)">—</span>
+</div>
+
+<!-- BUTTONS: Scan | Reset | Dashboard -->
+<div class="btn-row">
+  <button class="btn btn-scan"  id="pgScanBtn">⬡ Scan</button>
+  <button class="btn btn-reset" id="pgResetBtn">↺ Reset</button>
+  <button class="btn"           id="pgDashBtn">⊞ Dash</button>
 </div>
 
 <script src="popup.js"></script>
