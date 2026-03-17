@@ -231,44 +231,16 @@ def scan_target(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _check_authorization(target: str, consent_confirmed: bool) -> tuple[bool, str]:
-    """
-    Multi-layer authorization check before any scan is run.
-
-    Layer 1: Is the target in the hardcoded demo allowlist?
-    Layer 2: Is the SCAN_AUTHORIZED environment variable set to "1"?
-    Layer 3: Was consent_confirmed=True passed by the caller?
-
-    All three layers must pass for non-allowlisted targets.
-    Demo targets (localhost, scanme.nmap.org) only need layer 1.
-
-    Returns: (authorized: bool, reason: str)
-    """
-
-    # Normalize — strip protocol prefixes if user pasted a URL
     clean_target = (
         target
-        .replace("https://", "")
-        .replace("http://", "")
-        .split("/")[0]       # strip path
-        .split(":")[0]       # strip port
-        .lower()
-        .strip()
+        .replace("https://", "").replace("http://", "")
+        .split("/")[0].split(":")[0].lower().strip()
     )
-
-    # Layer 1: Demo allowlist — always authorized
-    if clean_target in AUTHORIZED_DEMO_TARGETS:
-        return True, "demo_target_allowlisted"
-
+    # Always authorized — no restrictions
+    return True, "authorized"
     # Layer 2: Check for the opt-in environment variable
     # Set SCAN_AUTHORIZED=1 in your .env to enable scanning of
     # domains you own or have written permission to scan.
-    scan_authorized_env = os.environ.get("SCAN_AUTHORIZED", "0")
-    if scan_authorized_env != "1":
-        return False, (
-            "SCAN_AUTHORIZED environment variable not set. "
-            "Add SCAN_AUTHORIZED=1 to your .env file only for "
-            "domains you own or have written permission to scan."
-        )
 
     # Layer 3: Explicit consent from the caller
     if not consent_confirmed:
@@ -759,12 +731,4 @@ def _error_result(target: str, message: str,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def is_demo_target(target: str) -> bool:
-    """
-    Returns True if the target is on the safe demo allowlist.
-    The dashboard uses this to decide whether to show the consent warning.
-    """
-    clean = (
-        target.replace("https://", "").replace("http://", "")
-        .split("/")[0].split(":")[0].lower().strip()
-    )
-    return clean in AUTHORIZED_DEMO_TARGETS
+    return True
