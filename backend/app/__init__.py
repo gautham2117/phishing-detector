@@ -172,13 +172,6 @@ def _register_blueprints(app: Flask) -> None:
             "System Architecture",
             "Phase 15"
         ),
-        (
-            "backend.app.routes.threat_explain",
-            "threat_bp",
-            "/threat/explain",
-            "Threat Explanation",
-            "Phase 16"
-        ),
     ]
 
     for module_path, bp_name, placeholder_url, title, phase in optional_blueprints:

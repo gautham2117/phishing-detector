@@ -282,12 +282,18 @@ def dashboard_health():
     try:
         resp = http_requests.get(
             f"{FASTAPI_BASE}/api/architecture/health",
-            timeout=PROXY_TIMEOUT,
+            timeout=3,
         )
         return jsonify(resp.json()), resp.status_code
-    except Exception as ex:
-        return jsonify({"status": "error", "message": str(ex)}), 502
-
+    except Exception:
+        return jsonify({
+            "status":  "success",
+            "overall": "degraded",
+            "summary": {"online": 0, "degraded": 0, "offline": 0, "total": 0},
+            "modules": [],
+            "_offline": True,
+            "_message": "Start FastAPI: python -m backend.run_fastapi",
+        }), 200
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Widget helpers
