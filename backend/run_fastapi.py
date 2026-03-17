@@ -1,4 +1,6 @@
 # backend/run_fastapi.py
+from dotenv import load_dotenv
+load_dotenv()
 import os
 import sys
 
