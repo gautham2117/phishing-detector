@@ -282,7 +282,7 @@ document.getElementById('roleForm').addEventListener('submit', e => {
  
 /* ── ✏️  CHANGE CREDENTIALS HERE ── */
 const ADMIN_USER = 'admin';
-const ADMIN_PASS = 'admin123';
+const ADMIN_PASS = 'Mahoraga@2026';
 /* ──────────────────────────────── */
  
 const adminLoginForm = document.getElementById('adminLoginForm');
