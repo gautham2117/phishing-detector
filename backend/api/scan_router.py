@@ -51,7 +51,7 @@ from backend.modules.platform_monitor   import (
     get_due_targets, get_unified_feed
 )
 from backend.modules.risk_engine        import aggregate_risk_scores
-from backend.modules.risk_aggregator    import (   # FIX 7 — was missing entirely
+from backend.modules.risk_engine    import (   # FIX 7 — was missing entirely
     aggregate_risk_scores_auto,
     probe_module_status,
 )
