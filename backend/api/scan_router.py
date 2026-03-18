@@ -17,6 +17,10 @@
 #   5. scan_url_batch now calls analyze_url() per-URL instead of passing
 #      List[str] to analyze_url_batch() which expects List[dict]
 #   6. _save_email_scan wrapped in _flask_ctx()
+#   7. Phase 10 — Added missing FastAPI routes:
+#        GET  /risk/status         → probe_module_status()
+#        POST /risk/aggregate/auto → aggregate_risk_scores_auto()
+#      Both were implemented in risk_aggregator.py but never wired to a route.
 
 import io as _io
 import json
@@ -47,6 +51,10 @@ from backend.modules.platform_monitor   import (
     get_due_targets, get_unified_feed
 )
 from backend.modules.risk_engine        import aggregate_risk_scores
+from backend.modules.risk_aggregator    import (   # FIX 7 — was missing entirely
+    aggregate_risk_scores_auto,
+    probe_module_status,
+)
 from backend.modules.model_manager      import (
     add_feedback_label, get_feedback_queue,
     get_model_versions, get_training_state,
@@ -155,6 +163,14 @@ class AggregateRequest(PydanticBase):
     weights:         Optional[dict] = None
 
 
+class AutoAggregateRequest(PydanticBase):           # FIX 7 — new model
+    """
+    Optional body for POST /risk/aggregate/auto.
+    All fields optional — omit body entirely for default weights.
+    """
+    weights: Optional[dict] = None
+
+
 class FeedbackLabelRequest(PydanticBase):
     url:            str
     label_type:     str
@@ -226,28 +242,13 @@ def _risk_level_to_label(risk_level: str) -> str:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FIX 1 — URL result score/label extractor
-# analyze_url() returns risk_contribution (0-15 scale) and ml_result.score
-# (0-1). This helper derives a unified 0-100 risk_score and label from those.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_url_risk(result: dict) -> tuple:
-    """
-    Extract (risk_score: float 0-100, label: str) from an analyze_url() result.
-
-    analyze_url() does NOT return a top-level risk_score or label.
-    It returns:
-      - ml_result.score  : 0.0-1.0  phishing probability from BERT
-      - flags            : list of flag dicts with "severity" keys
-      - domain_age_flag  : bool
-      - risk_contribution: 0-15 (email-level weight, not used here)
-    """
     ml       = result.get("ml_result", {})
     ml_score = float(ml.get("score", 0.0))
-
-    # Base score from ML model (0-100)
     base_score = round(ml_score * 100, 2)
 
-    # Add penalties for high/medium severity URL flags (cap at 20 pts)
     flags = result.get("flags", [])
     flag_penalty = 0.0
     for f in flags:
@@ -260,11 +261,9 @@ def _extract_url_risk(result: dict) -> tuple:
             flag_penalty += 1.0
     flag_penalty = min(flag_penalty, 20.0)
 
-    # Young domain adds risk
     age_penalty = 5.0 if result.get("domain_age_flag") else 0.0
-
-    risk_score = min(round(base_score + flag_penalty + age_penalty, 2), 100.0)
-    label      = _score_to_label(risk_score)
+    risk_score  = min(round(base_score + flag_penalty + age_penalty, 2), 100.0)
+    label       = _score_to_label(risk_score)
     return risk_score, label
 
 
@@ -283,10 +282,6 @@ def _auto_alert(
     rules:       list = None,
     ml_verdicts: dict = None,
 ) -> None:
-    """
-    Silently fire an alert for any SUSPICIOUS or MALICIOUS scan result.
-    Called at the end of every scan endpoint. Never raises.
-    """
     if verdict.upper() not in (
         "SUSPICIOUS", "MALICIOUS", "PHISHING",
         "AI_GENERATED", "HIGH", "CRITICAL"
@@ -427,22 +422,15 @@ async def scan_email_file(
              tags=["URL Scanning"])
 async def scan_url(request: URLScanRequest):
     try:
-        result = analyze_url(request.url)
-
-        # FIX: analyze_url() has no top-level risk_score / label.
-        # Derive them from ml_result + flags.
+        result               = analyze_url(request.url)
         risk_score, label    = _extract_url_risk(result)
         action               = _label_to_action(label)
-
-        # Attach for downstream helpers (_save_url_scan, explanation, etc.)
         result["risk_score"] = risk_score
         result["label"]      = label
-
-        scan_id = _save_url_scan(result, email_id=None)
+        scan_id              = _save_url_scan(result, email_id=None)
 
         _auto_alert(
-            "URL", "url", scan_id,
-            risk_score, label, action,
+            "URL", "url", scan_id, risk_score, label, action,
             findings={
                 "flags": [f.get("flag", "") for f in result.get("flags", [])]
             },
@@ -477,8 +465,6 @@ async def scan_url_batch(
         raise HTTPException(status_code=400, detail="Batch limit is 50 URLs.")
 
     try:
-        # FIX: analyze_url_batch() expects List[dict] with "raw" key but was
-        # called with List[str] — use direct per-URL loop to avoid TypeError.
         results = []
         for url in urls:
             r                = analyze_url(url)
@@ -756,7 +742,7 @@ async def scan_file(
         label  = label_map.get(verdict, "SUSPICIOUS")
         action = _label_to_action(label)
 
-        reasons = result.get("verdict_reasons", [])
+        reasons     = result.get("verdict_reasons", [])
         explanation = (
             f"File '{filename}' flagged: {'; '.join(reasons[:3])}."
             if reasons
@@ -819,7 +805,7 @@ async def scan_image(file: UploadFile = File(...)):
         label  = label_map.get(verdict, "SUSPICIOUS")
         action = _label_to_action(label)
 
-        db_id = _save_image_scan(result, filename)
+        db_id           = _save_image_scan(result, filename)
         result["db_id"] = db_id
 
         _auto_alert(
@@ -1202,7 +1188,7 @@ async def poll_due_targets():
 # Phase 10 — Risk Score Aggregator
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.post("/risk/aggregate", summary="Aggregate risk scores",
+@router.post("/risk/aggregate", summary="Aggregate risk scores — manual (by scan ID)",
              tags=["Risk Score Aggregator"])
 async def aggregate_risk(req: AggregateRequest):
     try:
@@ -1258,6 +1244,107 @@ async def aggregate_risk(req: AggregateRequest):
         return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
+@router.post(                                              # FIX 7 — new route
+    "/risk/aggregate/auto",
+    summary="Aggregate risk scores — auto (most recent scan per module)",
+    tags=["Risk Score Aggregator"],
+)
+async def aggregate_risk_auto(req: AutoAggregateRequest):
+    """
+    Automatic mode — no scan IDs required.
+    Pulls the most recent record from every module table that has data.
+    Modules with no records are excluded from the weighted calculation.
+
+    Optional body: {"weights": {"email": 0.20, "url": 0.30, ...}}
+    Weights are normalised internally — partial overrides are safe.
+    """
+    try:
+        with _flask_ctx():
+            result = aggregate_risk_scores_auto(weights=req.weights)
+
+        if result.get("error"):
+            # Means no module has any scan records yet
+            return JSONResponse(
+                status_code=422,
+                content=error_response(result["error"]),
+            )
+
+        verdict = result["verdict"]
+        label   = {
+            "CLEAN":      "SAFE",
+            "SUSPICIOUS": "SUSPICIOUS",
+            "MALICIOUS":  "MALICIOUS",
+        }.get(verdict, "SUSPICIOUS")
+
+        # Build synthetic request from breakdown scan_ids so
+        # _save_aggregated_score can store the correct foreign keys
+        bd = result.get("breakdown", {})
+
+        class _AutoReq:
+            email_scan_id   = bd.get("email",      {}).get("scan_id")
+            url_scan_id     = bd.get("url",        {}).get("scan_id")
+            network_scan_id = bd.get("network",    {}).get("scan_id")
+            attachment_id   = bd.get("attachment", {}).get("scan_id")
+            ai_detection_id = bd.get("ai",         {}).get("scan_id")
+            image_scan_id   = bd.get("image",      {}).get("scan_id")
+
+        db_id = None
+        try:
+            with _flask_ctx():
+                db_id = _save_aggregated_score(result, _AutoReq())
+        except Exception as save_ex:
+            logger.warning("Auto-agg DB save failed (non-fatal): %s", save_ex)
+
+        return build_response(
+            status="success",
+            risk_score=result["final_score"],
+            label=label,
+            module_results={"risk_aggregator": result},
+            explanation=result["explanation"],
+            recommended_action=result["action"],
+        ) | {"scan_id": db_id, "mode": "auto"}
+
+    except Exception as e:
+        logger.error("Risk auto-aggregate error: %s", e, exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e)),
+        )
+
+
+@router.get(                                               # FIX 7 — new route
+    "/risk/status",
+    summary="Module status probe — online/offline + latest scan per module",
+    tags=["Risk Score Aggregator"],
+)
+async def risk_status():
+    """
+    Returns online/offline status and latest scan metadata for all six modules.
+    Consumed by the auto-mode status grid before aggregation so the UI can
+    show which modules have data and what their most recent score was.
+
+    Response shape per module key:
+        online     : bool
+        scan_id    : int | None
+        score      : float | None  (0-100)
+        ref        : str           (sender / domain / filename)
+        scanned_at : str           (ISO 8601 UTC)
+    """
+    try:
+        with _flask_ctx():
+            status = probe_module_status()
+        return {
+            "status":  "success",
+            "modules": status,
+        }
+    except Exception as e:
+        logger.error("Risk status probe error: %s", e, exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content=error_response(str(e)),
+        )
+
+
 @router.get("/risk/history", summary="Aggregation history",
             tags=["Risk Score Aggregator"])
 async def risk_history(limit: int = 20):
@@ -1290,6 +1377,7 @@ async def risk_detail(record_id: int):
         raise
     except Exception as e:
         return JSONResponse(status_code=500, content=error_response(str(e)))
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 12 — Model Management
@@ -1412,8 +1500,7 @@ async def api_create_alert(req: CreateAlertRequest):
         return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
-@router.get("/alerts/stats", summary="Alert statistics",
-            tags=["Alerts"])
+@router.get("/alerts/stats", summary="Alert statistics", tags=["Alerts"])
 async def api_alert_stats():
     try:
         with _flask_ctx():
@@ -1445,9 +1532,7 @@ async def api_export_csv(
         return StreamingResponse(
             _io.BytesIO(csv_bytes),
             media_type="text/csv",
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}"
-            },
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
     except Exception as e:
         return JSONResponse(status_code=500, content=error_response(str(e)))
@@ -1488,8 +1573,7 @@ async def api_export_pdf(alert_id: int):
         return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
-@router.get("/alerts/{alert_id}", summary="Get alert detail",
-            tags=["Alerts"])
+@router.get("/alerts/{alert_id}", summary="Get alert detail", tags=["Alerts"])
 async def api_get_alert(alert_id: int):
     try:
         with _flask_ctx():
@@ -1503,8 +1587,7 @@ async def api_get_alert(alert_id: int):
         return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
-@router.get("/alerts", summary="List alerts with filters",
-            tags=["Alerts"])
+@router.get("/alerts", summary="List alerts with filters", tags=["Alerts"])
 async def api_list_alerts(
     severity:  Optional[str] = None,
     module:    Optional[str] = None,
@@ -1558,8 +1641,7 @@ async def api_dismiss_alert(alert_id: int, req: DismissRequest):
         return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
-@router.get("/audit/log", summary="Immutable audit trail",
-            tags=["Alerts"])
+@router.get("/audit/log", summary="Immutable audit trail", tags=["Alerts"])
 async def api_audit_log(limit: int = 100):
     try:
         with _flask_ctx():
@@ -1578,28 +1660,16 @@ class ExtensionScanRequest(PydanticBase):
     source: Optional[str] = "extension"
 
 
-@router.post(
-    "/extension/scan",
-    summary="Scan a URL from the browser extension",
-    tags=["Extension"]
-)
+@router.post("/extension/scan", summary="Scan a URL from the browser extension",
+             tags=["Extension"])
 async def extension_scan(req: ExtensionScanRequest):
-    """
-    Dedicated endpoint for the Chrome extension.
-    Runs full URL analysis and logs result to ExtensionScan table.
-    Returns risk score, label, and BART threat summary.
-    """
     try:
-        # ── Run URL intelligence ───────────────────────────────────────────
         result               = analyze_url(req.url)
-
-        # FIX: derive score/label — analyze_url() has no top-level risk_score
         score, label         = _extract_url_risk(result)
         result["risk_score"] = score
         result["label"]      = label
         action               = _label_to_action(label)
 
-        # ── Generate BART threat summary ───────────────────────────────────
         threat_summary = ""
         try:
             from backend.ml.model_loader import get_model
@@ -1637,7 +1707,6 @@ async def extension_scan(req: ExtensionScanRequest):
                 or f"{label} — risk score {score:.1f}/100."
             )
 
-        # ── Save to ExtensionScan table ────────────────────────────────────
         db_id = None
         try:
             with _flask_ctx():
@@ -1666,7 +1735,6 @@ async def extension_scan(req: ExtensionScanRequest):
             except Exception:
                 pass
 
-        # ── Auto-alert if suspicious/malicious ─────────────────────────────
         _auto_alert(
             "Extension", "url", db_id,
             score, label, action,
@@ -1702,11 +1770,8 @@ async def extension_scan(req: ExtensionScanRequest):
         )
 
 
-@router.get(
-    "/extension/history",
-    summary="Recent URLs scanned via extension",
-    tags=["Extension"]
-)
+@router.get("/extension/history", summary="Recent URLs scanned via extension",
+            tags=["Extension"])
 async def extension_history(limit: int = 50):
     try:
         with _flask_ctx():
@@ -1736,13 +1801,9 @@ async def extension_history(limit: int = 50):
         return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
-@router.get(
-    "/extension/status",
-    summary="Extension ping / health check",
-    tags=["Extension"]
-)
+@router.get("/extension/status", summary="Extension ping / health check",
+            tags=["Extension"])
 async def extension_status():
-    """Called by the extension every 30s to confirm backend is reachable."""
     return {
         "status":  "online",
         "version": "1.0.0",
@@ -1754,11 +1815,9 @@ async def extension_status():
 # Phase 15 — System Architecture & Health
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get(
-    "/architecture/health",
-    summary="Live health check for all module endpoints",
-    tags=["System Architecture"]
-)
+@router.get("/architecture/health",
+            summary="Live health check for all module endpoints",
+            tags=["System Architecture"])
 async def architecture_health():
     try:
         results  = check_module_health()
@@ -1786,17 +1845,12 @@ async def architecture_health():
         }
     except Exception as e:
         logger.error(f"Health check error: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content=error_response(str(e))
-        )
+        return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
-@router.get(
-    "/architecture/metrics",
-    summary="CPU, memory, request rate, and DB stats",
-    tags=["System Architecture"]
-)
+@router.get("/architecture/metrics",
+            summary="CPU, memory, request rate, and DB stats",
+            tags=["System Architecture"])
 async def architecture_metrics():
     try:
         sys_metrics  = get_system_metrics()
@@ -1816,32 +1870,23 @@ async def architecture_metrics():
         }
     except Exception as e:
         logger.error(f"Metrics error: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content=error_response(str(e))
-        )
+        return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
-@router.get(
-    "/architecture/migration-plan",
-    summary="SQLite to PostgreSQL migration plan",
-    tags=["System Architecture"]
-)
+@router.get("/architecture/migration-plan",
+            summary="SQLite to PostgreSQL migration plan",
+            tags=["System Architecture"])
 async def architecture_migration_plan():
     try:
         plan = get_migration_plan()
         return {"status": "success", "plan": plan}
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content=error_response(str(e))
-        )
+        return JSONResponse(status_code=500, content=error_response(str(e)))
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 1 helpers
 # ─────────────────────────────────────────────────────────────────────────────
-
-# FIND this function in backend/api/scan_router.py and replace it entirely:
 
 def _calculate_phase1_risk(parsed: dict, submitter: str = "") -> float:
     score = 0.0
@@ -1859,11 +1904,6 @@ def _calculate_phase1_risk(parsed: dict, submitter: str = "") -> float:
     )
     score += min(anomaly_score, 30)
 
-    # FIX: when the email is submitted from the Chrome extension, the raw_email
-    # is reconstructed from the Gmail DOM — it has no real Received/Authentication
-    # headers so SPF/DKIM/DMARC always come back as "none".
-    # Applying auth penalties in this case produces false SUSPICIOUS scores on
-    # every legitimate Gmail message. Skip auth penalties for extension submissions.
     if submitter != "extension":
         auth = parsed.get("auth_results", {})
         if auth.get("spf")   in ("fail", "softfail", "none"): score += 3
@@ -1871,6 +1911,7 @@ def _calculate_phase1_risk(parsed: dict, submitter: str = "") -> float:
         if auth.get("dmarc") in ("fail", "none"):              score += 3
 
     return round(min(score, 100.0), 2)
+
 
 def _build_email_explanation(parsed: dict, label: str) -> str:
     parts = []
@@ -1899,10 +1940,6 @@ def _save_email_scan(
     label: str,
     filename: str = ""
 ) -> Optional[int]:
-    """
-    FIX: wrap all DB operations in _flask_ctx() so FastAPI can
-    write to the Flask-managed SQLAlchemy session.
-    """
     try:
         with _flask_ctx():
             scan = EmailScan(
@@ -1945,15 +1982,6 @@ def _save_email_scan(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_url_explanation(result: dict) -> str:
-    """
-    FIX: analyze_url() returns a flat result dict — field names corrected:
-      - ml_result.label  checked correctly via result.get("ml_result", {})
-      - domain_age_flag  at result level  (not whois["is_young_domain"])
-      - domain_age_days  at result level  (not whois["domain_age_days"])
-      - redirect_count   at result level  (not result["redirects"]["hop_count"])
-      - redirect_chain[-1] for final URL  (not result["redirects"]["final_url"])
-      - ssl.is_valid      (not ssl["valid"] — key does not exist in ssl_check)
-    """
     parts = []
 
     ml = result.get("ml_result", {})
@@ -1963,7 +1991,6 @@ def _build_url_explanation(result: dict) -> str:
             f"({int(ml.get('score', 0) * 100)}% confidence)."
         )
 
-    # FIX: domain_age_flag is at result level, not inside the whois dict
     if result.get("domain_age_flag"):
         age = result.get("domain_age_days", "unknown")
         parts.append(f"Domain is only {age} days old.")
@@ -1976,7 +2003,6 @@ def _build_url_explanation(result: dict) -> str:
     elif s.get("is_expired"):
         parts.append("SSL certificate has expired.")
 
-    # FIX: redirect_count is at result level, not inside result["redirects"]
     hop_count = result.get("redirect_count", 0)
     if hop_count > 2:
         chain        = result.get("redirect_chain", [])
@@ -1988,7 +2014,6 @@ def _build_url_explanation(result: dict) -> str:
             + (f" (final: {final_domain})" if final_domain else "") + "."
         )
 
-    # Flag summary fallback
     flags = result.get("flags", [])
     if not parts and flags:
         flag_names = [f.get("flag", f.get("description", "")) for f in flags[:3]]
@@ -2003,17 +2028,6 @@ def _save_url_scan(
     result: dict,
     email_id: Optional[int] = None
 ) -> Optional[int]:
-    """
-    FIX 1: wrapped in _flask_ctx() — FastAPI cannot use Flask DB session
-            without an active app context.
-    FIX 2: field name corrections to match analyze_url() return dict keys:
-            raw_url       (was "original_url"  — key does not exist)
-            final_url     (was "normalized_url" — key does not exist)
-            ip            string (was ip.ip_address — ip is already a string)
-            country       string (was ip.country    — same issue)
-            ssl.is_valid  (was ssl.valid — "valid" key does not exist in
-                           ssl_check() return dict; correct key is "is_valid")
-    """
     try:
         with _flask_ctx():
             scan = URLScan(
@@ -2080,7 +2094,6 @@ def _build_network_explanation(result: dict) -> str:
 
 
 def _save_network_scan(result: dict) -> Optional[int]:
-    """FIX: wrapped in _flask_ctx()."""
     try:
         with _flask_ctx():
             scan = NetworkScan(
@@ -2153,7 +2166,6 @@ def _save_attachment_scan(
     filename: str,
     email_scan_id: Optional[int]
 ) -> Optional[int]:
-    """FIX: wrapped in _flask_ctx()."""
     try:
         with _flask_ctx():
             hashes = result.get("hashes", {})
@@ -2188,7 +2200,6 @@ def _save_attachment_scan(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _save_image_scan(result: dict, filename: str) -> Optional[int]:
-    """FIX: wrapped in _flask_ctx()."""
     try:
         with _flask_ctx():
             record = ImageAnalysisScan(
@@ -2237,7 +2248,6 @@ def _ai_verdict_to_label(verdict: str) -> str:
 
 
 def _save_ai_detection_scan(result: dict) -> Optional[int]:
-    """FIX: wrapped in _flask_ctx()."""
     try:
         with _flask_ctx():
             record = AIDetectionScan(
@@ -2308,7 +2318,7 @@ def _serialize_scan_result(r) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _save_aggregated_score(result: dict, req) -> Optional[int]:
-    """NOTE: already called inside a _flask_ctx() block in aggregate_risk()."""
+    """NOTE: must be called inside an active _flask_ctx() block."""
     try:
         bd = result.get("breakdown", {})
         record = AggregatedRiskScore(
