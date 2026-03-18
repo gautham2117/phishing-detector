@@ -2,6 +2,9 @@
 backend/app/routes/model_mgmt.py
 Phase 12 — Model Management Flask blueprint
 Variable name: model_mgmt_bp  |  url_prefix: /models
+
+Access control: ALL routes in this blueprint require the 'admin' role.
+Analysts and visitors receive a 403 via the role_required decorator.
 """
 
 import logging
@@ -11,6 +14,8 @@ from flask import (
     Blueprint, render_template, request,
     jsonify, current_app
 )
+from backend.app.auth import role_required
+
 
 logger        = logging.getLogger(__name__)
 model_mgmt_bp = Blueprint(
@@ -27,36 +32,43 @@ def _api():
 # ── Page ──────────────────────────────────────────────────────────────────────
 
 @model_mgmt_bp.route("/")
+@role_required("admin")
 def index():
     return render_template("model_mgmt.html")
 
 
-# ── Feedback submit ───────────────────────────────────────────────────────────
+# ── Feedback (submit POST + fetch queue GET — single endpoint, method dispatch)
 
-@model_mgmt_bp.route("/feedback", methods=["POST"])
-def submit_feedback():
-    payload = request.get_json(silent=True) or {}
-    if not payload.get("url") or not payload.get("label_type"):
-        return jsonify({
-            "status":  "error",
-            "message": "url and label_type are required."
-        }), 400
-    try:
-        resp = http_requests.post(
-            f"{_api()}/api/models/feedback",
-            json=payload,
-            timeout=15,
-        )
-        return jsonify(resp.json()), resp.status_code
-    except Exception as ex:
-        logger.error("Feedback proxy error: %s", ex)
-        return jsonify({"status": "error", "message": str(ex)}), 502
+@model_mgmt_bp.route("/feedback", methods=["GET", "POST"])
+@role_required("admin")
+def feedback():
+    """
+    GET  /models/feedback?limit=N  → returns the feedback queue
+    POST /models/feedback           → submits a new feedback entry
 
+    Merged into one view to avoid Flask endpoint name collision that
+    occurred when submit_feedback and feedback_queue were registered
+    separately on the same URL path.
+    """
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        if not payload.get("url") or not payload.get("label_type"):
+            return jsonify({
+                "status":  "error",
+                "message": "url and label_type are required."
+            }), 400
+        try:
+            resp = http_requests.post(
+                f"{_api()}/api/models/feedback",
+                json=payload,
+                timeout=15,
+            )
+            return jsonify(resp.json()), resp.status_code
+        except Exception as ex:
+            logger.error("Feedback proxy error: %s", ex)
+            return jsonify({"status": "error", "message": str(ex)}), 502
 
-# ── Feedback queue ────────────────────────────────────────────────────────────
-
-@model_mgmt_bp.route("/feedback")
-def feedback_queue():
+    # GET — return feedback queue
     limit = request.args.get("limit", 50)
     try:
         resp = http_requests.get(
@@ -66,12 +78,14 @@ def feedback_queue():
         )
         return jsonify(resp.json()), resp.status_code
     except Exception as ex:
+        logger.error("Feedback queue proxy error: %s", ex)
         return jsonify({"status": "error", "message": str(ex)}), 502
 
 
 # ── Trigger retrain ───────────────────────────────────────────────────────────
 
 @model_mgmt_bp.route("/retrain", methods=["POST"])
+@role_required("admin")
 def trigger_retrain():
     try:
         resp = http_requests.post(
@@ -89,6 +103,7 @@ def trigger_retrain():
 # ── Training status / log ─────────────────────────────────────────────────────
 
 @model_mgmt_bp.route("/retrain/status")
+@role_required("admin")
 def retrain_status():
     try:
         resp = http_requests.get(
@@ -97,12 +112,14 @@ def retrain_status():
         )
         return jsonify(resp.json()), resp.status_code
     except Exception as ex:
+        logger.error("Retrain status proxy error: %s", ex)
         return jsonify({"status": "error", "message": str(ex)}), 502
 
 
 # ── Model versions ────────────────────────────────────────────────────────────
 
 @model_mgmt_bp.route("/versions")
+@role_required("admin")
 def model_versions():
     try:
         resp = http_requests.get(
@@ -111,12 +128,14 @@ def model_versions():
         )
         return jsonify(resp.json()), resp.status_code
     except Exception as ex:
+        logger.error("Model versions proxy error: %s", ex)
         return jsonify({"status": "error", "message": str(ex)}), 502
 
 
 # ── HuggingFace fine-tune plan ────────────────────────────────────────────────
 
 @model_mgmt_bp.route("/finetune-plan")
+@role_required("admin")
 def finetune_plan():
     try:
         resp = http_requests.get(
@@ -125,4 +144,5 @@ def finetune_plan():
         )
         return jsonify(resp.json()), resp.status_code
     except Exception as ex:
+        logger.error("Finetune plan proxy error: %s", ex)
         return jsonify({"status": "error", "message": str(ex)}), 502

@@ -1,257 +1,1289 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MAHORAGA Sentinel — Select Role</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #0f1117;
-      color: #e6edf3;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-    }
-
-    .rs-container {
-      width: 100%;
-      max-width: 560px;
-    }
-
-    .rs-header {
-      text-align: center;
-      margin-bottom: 36px;
-    }
-    .rs-logo {
-      font-size: 3rem;
-      margin-bottom: 10px;
-    }
-    .rs-title {
-      font-size: 1.8rem;
-      font-weight: 800;
-      color: #388bfd;
-      margin-bottom: 4px;
-      letter-spacing: 0.04em;
-    }
-    .rs-subtitle-name {
-      font-size: 1rem;
-      font-weight: 600;
-      color: #8b949e;
-      margin-bottom: 8px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-    }
-    .rs-subtitle {
-      font-size: .88rem;
-      color: #8b949e;
-      line-height: 1.6;
-    }
-
-    .rs-cards {
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      margin-bottom: 24px;
-    }
-
-    .rs-card {
-      background: #161b22;
-      border: 2px solid #30363d;
-      border-radius: 12px;
-      padding: 20px 24px;
-      cursor: pointer;
-      transition: border-color .2s, background .2s, transform .1s;
-      display: flex;
-      align-items: center;
-      gap: 18px;
-      user-select: none;
-    }
-    .rs-card:hover  { background: #21262d; transform: translateY(-1px); }
-    .rs-card.selected { background: #21262d; }
-
-    .rs-card-icon {
-      font-size: 2rem;
-      flex-shrink: 0;
-      width: 44px;
-      text-align: center;
-    }
-
-    .rs-card-body   { flex: 1; }
-    .rs-card-title  {
-      font-size: 1rem;
-      font-weight: 700;
-      margin-bottom: 4px;
-    }
-    .rs-card-desc {
-      font-size: .82rem;
-      color: #8b949e;
-      line-height: 1.5;
-    }
-
-    .rs-card-check {
-      width: 22px;
-      height: 22px;
-      border-radius: 50%;
-      border: 2px solid #30363d;
-      flex-shrink: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: .8rem;
-      transition: background .2s, border-color .2s;
-      color: #fff;
-    }
-
-    .rs-submit-btn {
-      width: 100%;
-      padding: 14px;
-      background: #388bfd;
-      border: none;
-      border-radius: 10px;
-      color: #fff;
-      font-size: 1rem;
-      font-weight: 700;
-      cursor: pointer;
-      transition: background .15s, opacity .15s;
-      opacity: .4;
-      pointer-events: none;
-    }
-    .rs-submit-btn.active {
-      opacity: 1;
-      pointer-events: auto;
-    }
-    .rs-submit-btn.active:hover { filter: brightness(1.1); }
-
-    .rs-note {
-      text-align: center;
-      font-size: .76rem;
-      color: #8b949e;
-      margin-top: 16px;
-      line-height: 1.6;
-    }
-
-    .rs-divider {
-      width: 48px;
-      height: 2px;
-      background: linear-gradient(90deg, #388bfd, #f85149);
-      margin: 10px auto 12px;
-      border-radius: 2px;
-    }
-  </style>
+<style>
+:root {
+  --bg:          #06030f;
+  --surface:     #0e0820;
+  --card:        #110d24;
+  --card-hover:  #16112e;
+ 
+  --border:      #241848;
+  --border-mid:  #332466;
+  --border-lit:  #5535aa;
+ 
+  /* PRIMARY — vivid violet */
+  --blue:        #a855f7;
+  --blue-soft:   rgba(168,85,247,0.13);
+  --blue-glow:   rgba(168,85,247,0.32);
+ 
+  /* ACCENT — hot magenta */
+  --red:         #e040fb;
+  --red-soft:    rgba(224,64,251,0.13);
+  --red-glow:    rgba(224,64,251,0.35);
+ 
+  /* CONFIRM — electric mint */
+  --green:       #7cffd4;
+  --green-soft:  rgba(124,255,212,0.12);
+ 
+  /* EXTRAS */
+  --purple:      #c084fc;
+  --cyan:        #818cf8;
+  --amber:       #f472b6;
+ 
+  --text:        #ede9ff;
+  --text-2:      #9d87cc;
+  --text-3:      #4a3472;
+ 
+  --font-head:   'Times New Roman', Times, serif;
+  --font-mono:   'JetBrains Mono', monospace;
+ 
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --ease: cubic-bezier(.4,0,.2,1);
+}
+ 
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+html { -webkit-font-smoothing:antialiased; }
+ 
+body {
+  font-family: var(--font-head);
+  background:  var(--bg);
+  color:       var(--text);
+  min-height:  100vh;
+  display:     flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 20px;
+  overflow-x: hidden;
+  position: relative;
+}
+ 
+/* ── COSMIC CANVAS ── */
+#cosmos {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+ 
+/* ── Subtle grid overlay ── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(168,85,247,0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(168,85,247,0.05) 1px, transparent 1px);
+  background-size: 60px 60px;
+  pointer-events: none;
+  z-index: 1;
+}
+ 
+/* ── WRAPPER ── */
+.wrap {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 540px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+ 
+/* ════════════════════════════
+   BRAND HEADER
+════════════════════════════ */
+.brand {
+  text-align: center;
+  margin-bottom: 44px;
+  animation: rise .65s var(--ease) both;
+}
+ 
+.brand-mark {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 18px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+ 
+/* Orbiting rings */
+.brand-mark-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  animation: orbitSpin 6s linear infinite;
+}
+.brand-mark-ring:nth-child(1) {
+  width: 72px; height: 72px;
+  border-color: rgba(168,85,247,0.45) transparent rgba(168,85,247,0.45) transparent;
+  animation-duration: 4s;
+}
+.brand-mark-ring:nth-child(2) {
+  width: 52px; height: 52px;
+  border-color: transparent rgba(224,64,251,0.5) transparent rgba(224,64,251,0.5);
+  animation-duration: 3s;
+  animation-direction: reverse;
+}
+.brand-mark-ring:nth-child(3) {
+  width: 36px; height: 36px;
+  border-color: rgba(129,140,248,0.45) transparent rgba(129,140,248,0.45) transparent;
+  animation-duration: 2s;
+}
+ 
+@keyframes orbitSpin {
+  to { transform: rotate(360deg); }
+}
+ 
+.brand-mark-blades {
+  position: absolute;
+  width: 100%; height: 100%;
+  animation: orbitSpin 12s linear infinite;
+}
+.brand-mark-blades::before,
+.brand-mark-blades::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 2px;
+  height: 30px;
+  background: linear-gradient(180deg, transparent, var(--blue), transparent);
+  border-radius: 2px;
+  transform-origin: 50% 0;
+}
+.brand-mark-blades::before { transform: translateX(-50%) translateY(0) rotate(-35deg); }
+.brand-mark-blades::after  { transform: translateX(-50%) translateY(0) rotate(35deg); }
+ 
+.brand-mark-center {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff 0%, var(--blue) 60%);
+  box-shadow:
+    0 0 8px var(--blue),
+    0 0 24px rgba(168,85,247,0.7),
+    0 0 48px rgba(168,85,247,0.25);
+  position: relative;
+  z-index: 1;
+  animation: corePulse 2s ease-in-out infinite;
+}
+@keyframes corePulse {
+  0%,100% { box-shadow: 0 0 8px var(--blue), 0 0 24px rgba(168,85,247,0.7), 0 0 48px rgba(168,85,247,0.25); }
+  50%     { box-shadow: 0 0 14px var(--blue), 0 0 40px rgba(224,64,251,0.9), 0 0 80px rgba(168,85,247,0.4); }
+}
+ 
+.brand-name {
+  font-size:      2.4rem;
+  font-weight:    700;
+  font-style:     italic;
+  letter-spacing: .22em;
+  color:          var(--blue);
+  line-height:    1;
+  margin-bottom:  6px;
+  text-shadow:
+    0 0 20px rgba(168,85,247,0.6),
+    0 0 60px rgba(168,85,247,0.25);
+  animation: textGlow 3s ease-in-out infinite;
+}
+@keyframes textGlow {
+  0%,100% { text-shadow: 0 0 20px rgba(168,85,247,0.6), 0 0 60px rgba(168,85,247,0.25); }
+  50%     { text-shadow: 0 0 30px rgba(224,64,251,0.9), 0 0 80px rgba(168,85,247,0.5), 0 0 120px rgba(168,85,247,0.2); }
+}
+ 
+.brand-tagline {
+  font-family:    var(--font-mono);
+  font-size:      .62rem;
+  letter-spacing: .35em;
+  color:          var(--text-3);
+  text-transform: uppercase;
+  margin-bottom:  16px;
+}
+ 
+.brand-rule {
+  width: 90px;
+  height: 2px;
+  margin: 0 auto 18px;
+  background: linear-gradient(90deg, transparent, var(--blue), var(--purple), var(--red), transparent);
+  border-radius: 2px;
+  animation: rulePulse 3s ease-in-out infinite;
+}
+@keyframes rulePulse {
+  0%,100% { opacity: 0.6; width: 90px; }
+  50%     { opacity: 1;   width: 120px; }
+}
+ 
+.brand-desc {
+  font-size:   .9rem;
+  color:       var(--text-2);
+  line-height: 1.8;
+  font-style: italic;
+}
+ 
+/* ════════════════════════════
+   ROLE CARDS
+════════════════════════════ */
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 20px;
+}
+ 
+.role-card {
+  display:     flex;
+  align-items: center;
+  gap:         20px;
+  background:  var(--card);
+  border:      1.5px solid var(--border);
+  border-radius: var(--r-lg);
+  padding:     22px 24px;
+  cursor:      pointer;
+  position:    relative;
+  overflow:    hidden;
+  transition:
+    border-color .25s var(--ease),
+    background   .25s var(--ease),
+    box-shadow   .3s var(--ease),
+    transform    .25s cubic-bezier(.34,1.56,.64,1);
+  animation: rise .55s var(--ease) both;
+}
+.role-card:nth-child(1) { animation-delay:.15s; }
+.role-card:nth-child(2) { animation-delay:.28s; }
+.role-card:nth-child(3) { animation-delay:.41s; }
+ 
+/* Particle burst layer */
+.role-card .particles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.role-card .particles span {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  opacity: 0;
+  transition: none;
+}
+ 
+/* Shimmer sweep */
+.role-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.04), transparent);
+  transition: left .6s var(--ease);
+  pointer-events: none;
+  z-index: 0;
+}
+.role-card:hover::before { left: 180%; }
+ 
+/* Glow halo underneath */
+.role-card::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: calc(var(--r-lg) + 2px);
+  opacity: 0;
+  transition: opacity .3s var(--ease);
+  pointer-events: none;
+  z-index: -1;
+}
+ 
+/* Admin card */
+#card-admin::after {
+  box-shadow: 0 0 30px rgba(224,64,251,0.3), inset 0 0 30px rgba(224,64,251,0.05);
+}
+#card-admin:hover::after,
+#card-admin.selected::after { opacity: 1; }
+ 
+#card-admin:hover,
+#card-admin.selected {
+  border-color: rgba(224,64,251,0.65);
+  background: linear-gradient(135deg, rgba(224,64,251,0.07) 0%, var(--card-hover) 50%, rgba(224,64,251,0.03) 100%);
+  box-shadow:
+    0 8px 40px rgba(224,64,251,0.22),
+    0 0 0 1px rgba(224,64,251,0.18),
+    inset 0 1px 0 rgba(224,64,251,0.12);
+  transform: translateY(-3px) scale(1.01);
+}
+ 
+/* Analyst card */
+#card-analyst::after {
+  box-shadow: 0 0 30px rgba(168,85,247,0.3), inset 0 0 30px rgba(168,85,247,0.05);
+}
+#card-analyst:hover::after,
+#card-analyst.selected::after { opacity: 1; }
+ 
+#card-analyst:hover,
+#card-analyst.selected {
+  border-color: rgba(168,85,247,0.65);
+  background: linear-gradient(135deg, rgba(168,85,247,0.07) 0%, var(--card-hover) 50%, rgba(168,85,247,0.03) 100%);
+  box-shadow:
+    0 8px 40px rgba(168,85,247,0.22),
+    0 0 0 1px rgba(168,85,247,0.18),
+    inset 0 1px 0 rgba(168,85,247,0.12);
+  transform: translateY(-3px) scale(1.01);
+}
+ 
+/* Viewer card */
+#card-viewer::after {
+  box-shadow: 0 0 30px rgba(124,255,212,0.22), inset 0 0 30px rgba(124,255,212,0.04);
+}
+#card-viewer:hover::after,
+#card-viewer.selected::after { opacity: 1; }
+ 
+#card-viewer:hover,
+#card-viewer.selected {
+  border-color: rgba(124,255,212,0.5);
+  background: linear-gradient(135deg, rgba(124,255,212,0.06) 0%, var(--card-hover) 50%, rgba(124,255,212,0.02) 100%);
+  box-shadow:
+    0 8px 40px rgba(124,255,212,0.15),
+    0 0 0 1px rgba(124,255,212,0.12),
+    inset 0 1px 0 rgba(124,255,212,0.08);
+  transform: translateY(-3px) scale(1.01);
+}
+ 
+/* Left accent bar */
+.role-card .accent-bar {
+  position: absolute;
+  left: 0; top: 10%; bottom: 10%;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  opacity: 0;
+  transition: opacity .25s, height .25s;
+}
+.role-card.selected .accent-bar,
+.role-card:hover     .accent-bar { opacity: 1; }
+ 
+/* Icon bubble */
+.card-icon-wrap {
+  width:  52px;
+  height: 52px;
+  flex-shrink: 0;
+  border-radius: var(--r-md);
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  transition: border-color .25s, background .25s, transform .3s cubic-bezier(.34,1.56,.64,1), box-shadow .25s;
+  position: relative;
+  z-index: 1;
+}
+ 
+#card-admin:hover .card-icon-wrap {
+  border-color: rgba(224,64,251,0.5);
+  background: rgba(224,64,251,0.1);
+  transform: rotate(-8deg) scale(1.12);
+  box-shadow: 0 0 22px rgba(224,64,251,0.4);
+}
+#card-analyst:hover .card-icon-wrap {
+  border-color: rgba(168,85,247,0.5);
+  background: rgba(168,85,247,0.1);
+  transform: rotate(6deg) scale(1.12);
+  box-shadow: 0 0 22px rgba(168,85,247,0.4);
+}
+#card-viewer:hover .card-icon-wrap {
+  border-color: rgba(124,255,212,0.4);
+  background: rgba(124,255,212,0.08);
+  transform: scale(1.15);
+  box-shadow: 0 0 22px rgba(124,255,212,0.3);
+}
+ 
+/* Card text */
+.card-text { flex: 1; position: relative; z-index: 1; }
+ 
+.card-title {
+  font-size:   1rem;
+  font-weight: 700;
+  font-style:  italic;
+  letter-spacing: .06em;
+  margin-bottom: 5px;
+  transition: letter-spacing .25s;
+}
+.role-card:hover .card-title { letter-spacing: .1em; }
+ 
+.card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+ 
+.card-badge {
+  font-family:    var(--font-mono);
+  font-size:      .54rem;
+  letter-spacing: .14em;
+  padding:        2px 8px;
+  border-radius:  3px;
+  font-weight:    500;
+  transition: transform .2s;
+}
+.role-card:hover .card-badge { transform: scale(1.05); }
+ 
+.card-desc {
+  font-size:   .82rem;
+  color:       var(--text-2);
+  line-height: 1.5;
+  font-style: italic;
+}
+ 
+/* Radio check */
+.card-check {
+  width:  28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--border-mid);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .72rem;
+  font-weight: 700;
+  color: #fff;
+  transition: all .25s var(--ease);
+  position: relative;
+  z-index: 1;
+}
+.role-card:hover .card-check {
+  border-color: var(--border-lit);
+  transform: scale(1.1);
+}
+ 
+/* ════════════════════════════
+   ENTER BUTTON
+════════════════════════════ */
+.enter-btn {
+  width:         100%;
+  padding:       16px 24px;
+  background:    var(--surface);
+  border:        1.5px solid var(--border);
+  border-radius: var(--r-md);
+  color:         var(--text-3);
+  font-family:   var(--font-head);
+  font-size:     .95rem;
+  font-weight:   700;
+  font-style:    italic;
+  letter-spacing: .08em;
+  cursor:        not-allowed;
+  transition:    all .25s var(--ease);
+  position:      relative;
+  overflow:      hidden;
+  margin-bottom: 22px;
+  animation:     rise .55s var(--ease) .52s both;
+}
+.enter-btn::before {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent);
+  transition: left .5s var(--ease);
+}
+.enter-btn.active {
+  background:   var(--blue);
+  border-color: var(--blue);
+  color:        #fff;
+  cursor:       pointer;
+  box-shadow:   0 0 30px rgba(168,85,247,0.4), 0 4px 20px rgba(168,85,247,0.25);
+}
+.enter-btn.active:hover {
+  background: #b86dff;
+  transform:  translateY(-2px);
+  box-shadow: 0 0 55px rgba(168,85,247,0.6), 0 8px 30px rgba(224,64,251,0.35);
+  letter-spacing: .14em;
+}
+.enter-btn.active:hover::before { left: 180%; }
+ 
+/* Footer */
+.foot-note {
+  text-align:  center;
+  font-family: var(--font-mono);
+  font-size:   .66rem;
+  color:       var(--text-3);
+  line-height: 1.8;
+  animation:   rise .55s var(--ease) .6s both;
+}
+.foot-note span { color: var(--text-2); }
+ 
+/* ════════════════════════════
+   MODAL OVERLAY
+════════════════════════════ */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-overlay.open { display: flex; }
+ 
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(3,5,10,0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+ 
+.modal-box {
+  position: relative;
+  z-index: 1;
+  background: var(--card);
+  border: 1.5px solid var(--border-mid);
+  border-radius: var(--r-lg);
+  padding: 38px 34px 30px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow:
+    0 40px 100px rgba(0,0,0,0.85),
+    0 0 0 1px rgba(255,85,85,0.1),
+    inset 0 1px 0 rgba(255,255,255,0.04);
+  animation: modalPop .3s cubic-bezier(.34,1.56,.64,1) both;
+}
+ 
+@keyframes modalPop {
+  from { opacity:0; transform:scale(.9) translateY(16px); }
+  to   { opacity:1; transform:scale(1) translateY(0); }
+}
+ 
+.modal-box::before,
+.modal-box::after {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-color: rgba(255,85,85,0.5);
+  border-style: solid;
+  border-width: 0;
+}
+.modal-box::before { top:10px; left:10px;  border-top-width:2px; border-left-width:2px; }
+.modal-box::after  { bottom:10px; right:10px; border-bottom-width:2px; border-right-width:2px; }
+ 
+.modal-top-line {
+  position: absolute;
+  top: 0; left: 15%; right: 15%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--blue), var(--red), transparent);
+  border-radius: 2px;
+}
+ 
+.modal-head {
+  text-align: center;
+  margin-bottom: 30px;
+}
+ 
+.modal-icon-ring {
+  position: relative;
+  width: 66px; height: 66px;
+  margin: 0 auto 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-icon-ring::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgba(224,64,251,0.4);
+  animation: ringPulse 2.4s ease-in-out infinite;
+}
+.modal-icon-ring::after {
+  content: '';
+  position: absolute;
+  inset: 9px;
+  border-radius: 50%;
+  border: 1px solid rgba(168,85,247,0.25);
+  animation: ringPulse 2.4s ease-in-out infinite .6s;
+}
+@keyframes ringPulse {
+  0%,100% { transform:scale(1); opacity:.6; }
+  50%     { transform:scale(1.15); opacity:.15; }
+}
+.modal-icon-emoji {
+  font-size: 2rem;
+  position: relative;
+  z-index: 1;
+  filter: drop-shadow(0 0 12px rgba(224,64,251,0.7));
+}
+ 
+.modal-title {
+  font-size:   1.3rem;
+  font-weight: 700;
+  font-style:  italic;
+  letter-spacing: .15em;
+  color: var(--red);
+  margin-bottom: 7px;
+  text-shadow: 0 0 22px rgba(224,64,251,0.55);
+}
+ 
+.modal-sub {
+  font-family:    var(--font-mono);
+  font-size:      .6rem;
+  letter-spacing: .16em;
+  color:          var(--text-3);
+}
+ 
+/* Form fields */
+.field-group { margin-bottom: 16px; }
+ 
+.field-label {
+  display:        flex;
+  align-items:    center;
+  gap:            8px;
+  font-family:    var(--font-mono);
+  font-size:      .6rem;
+  font-weight:    500;
+  letter-spacing: .2em;
+  color:          var(--text-2);
+  margin-bottom:  8px;
+}
+.field-num {
+  font-size: .55rem;
+  color: rgba(224,64,251,0.6);
+  padding-right: 6px;
+  border-right: 1px solid var(--border);
+}
+.field-wrap { position: relative; }
+.field-input {
+  width:         100%;
+  background:    rgba(3,5,10,0.8);
+  border:        1.5px solid var(--border);
+  border-radius: var(--r-sm);
+  padding:       12px 44px 12px 14px;
+  color:         var(--text);
+  font-family:   var(--font-mono);
+  font-size:     .88rem;
+  letter-spacing: .04em;
+  transition:    border-color .2s, box-shadow .2s;
+  outline:       none;
+}
+.field-input::placeholder { color: var(--text-3); }
+.field-input:focus {
+  border-color: rgba(168,85,247,0.65);
+  box-shadow:   0 0 0 3px rgba(168,85,247,0.15), inset 0 0 20px rgba(168,85,247,0.04);
+}
+.field-input.valid-field:not(:placeholder-shown) {
+  border-color: rgba(124,255,212,0.45);
+}
+.pw-toggle {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: 1rem;
+  padding: 4px 6px;
+  line-height: 1;
+  transition: color .18s;
+  border-radius: 4px;
+}
+.pw-toggle:hover { color: var(--text-2); }
+ 
+.modal-error {
+  display:    none;
+  align-items: center;
+  gap:        10px;
+  background: rgba(224,64,251,0.09);
+  border:     1px solid rgba(224,64,251,0.32);
+  border-radius: var(--r-sm);
+  padding:    10px 14px;
+  margin-bottom: 16px;
+  color:      var(--red);
+  font-family: var(--font-mono);
+  font-size:  .72rem;
+  letter-spacing: .02em;
+  animation:  shake .3s ease;
+}
+.modal-error.show { display:flex; }
+.error-icon {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--red);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .6rem;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+ 
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+.btn {
+  flex: 1;
+  padding: 14px 16px;
+  border-radius: var(--r-sm);
+  font-family: var(--font-head);
+  font-size: .82rem;
+  font-weight: 700;
+  font-style: italic;
+  letter-spacing: .1em;
+  cursor: pointer;
+  transition: all .2s var(--ease);
+  border: none;
+  position: relative;
+  overflow: hidden;
+}
+.btn-cancel {
+  background: var(--surface);
+  color: var(--text-2);
+  border: 1.5px solid var(--border-mid);
+}
+.btn-cancel:hover {
+  background: var(--card-hover);
+  border-color: var(--border-lit);
+  color: var(--text);
+}
+.btn-login {
+  background: var(--red);
+  color: #fff;
+  box-shadow: 0 4px 20px rgba(224,64,251,0.35);
+}
+.btn-login:hover:not(:disabled) {
+  background: #ed5cff;
+  box-shadow: 0 4px 30px rgba(224,64,251,0.55);
+  transform: translateY(-1px);
+}
+.btn-login:disabled { opacity:.6; cursor:not-allowed; transform:none; }
+.btn-login.success {
+  background: var(--green);
+  box-shadow: 0 4px 22px rgba(124,255,212,0.45);
+}
+.btn-spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+ 
+.modal-foot {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: .57rem;
+  letter-spacing: .1em;
+  color: var(--text-3);
+}
+ 
+/* ════════════════════════════
+   KEYFRAMES
+════════════════════════════ */
+@keyframes rise {
+  from { opacity:0; transform:translateY(18px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+@keyframes shake {
+  0%,100% { transform:translateX(0); }
+  22%     { transform:translateX(-5px); }
+  66%     { transform:translateX(5px); }
+}
+ 
+/* ════════════════════════════
+   RESPONSIVE
+════════════════════════════ */
+@media (max-width:480px) {
+  body       { padding:20px 14px; }
+  .brand-name { font-size:1.8rem; }
+  .role-card  { padding:16px; gap:14px; }
+  .modal-box  { padding:28px 18px 22px; }
+}
+</style>
 </head>
+ 
 <body>
-
-<div class="rs-container">
-
-  <div class="rs-header">
-    <div class="rs-logo">⚔</div>
-    <div class="rs-title">MAHORAGA</div>
-    <div class="rs-subtitle-name">Sentinel</div>
-    <div class="rs-divider"></div>
-    <div class="rs-subtitle">
+ 
+<!-- COSMIC CANVAS -->
+<canvas id="cosmos"></canvas>
+ 
+<div class="wrap">
+ 
+  <!-- BRAND -->
+  <div class="brand">
+    <div class="brand-mark">
+      <div class="brand-mark-ring"></div>
+      <div class="brand-mark-ring"></div>
+      <div class="brand-mark-ring"></div>
+      <div class="brand-mark-blades"></div>
+      <div class="brand-mark-center"></div>
+    </div>
+    <div class="brand-name">MAHORAGA</div>
+    <div class="brand-tagline">SENTINEL PLATFORM</div>
+    <div class="brand-rule"></div>
+    <p class="brand-desc">
       AI-Powered Threat Intelligence &amp; Phishing Detection Platform<br>
       Select your access role to continue
-    </div>
+    </p>
   </div>
-
-  <form method="POST" action="/role/set" id="roleForm">
-    <input type="hidden" name="role" id="roleInput" value="">
-
-    <div class="rs-cards">
-      {% for role_key, role_cfg in roles.items() %}
-      <div class="rs-card"
-           id="card-{{ role_key }}"
-           data-role="{{ role_key }}"
-           data-color="{{ role_cfg.color }}"
-           data-label="{{ role_cfg.label }}">
-
-        <div class="rs-card-icon">{{ role_cfg.icon }}</div>
-
-        <div class="rs-card-body">
-          <div class="rs-card-title"
-               id="title-{{ role_key }}">
-            {{ role_cfg.label }}
+ 
+  <!-- ROLE FORM -->
+  <form id="roleForm" method="POST" action="/role/set">
+    <input type="hidden" id="roleInput"     name="role"     value="">
+    <input type="hidden" id="usernameInput" name="username" value="">
+    <input type="hidden" id="passwordInput" name="password" value="">
+ 
+    <div class="cards">
+ 
+      <!-- ADMIN -->
+      <div class="role-card" id="card-admin" data-role="admin">
+        <div class="particles" id="p-admin"></div>
+        <div class="accent-bar" id="bar-admin" style="background:linear-gradient(180deg,#e040fb,#d580ff,#e040fb)"></div>
+        <div class="card-icon-wrap">👑</div>
+        <div class="card-text">
+          <div class="card-title" style="color:#e040fb">Admin</div>
+          <div class="card-meta">
+            <span class="card-badge" style="background:rgba(224,64,251,.12);color:#e040fb;border:1px solid rgba(224,64,251,.3)">FULL ACCESS</span>
           </div>
-          <div class="rs-card-desc">
-            {{ role_cfg.description }}
-          </div>
+          <div class="card-desc">All modules · model management · alerts · architecture</div>
         </div>
-
-        <div class="rs-card-check"
-             id="check-{{ role_key }}"></div>
+        <div class="card-check" id="check-admin"></div>
       </div>
-      {% endfor %}
+ 
+      <!-- ANALYST -->
+      <div class="role-card" id="card-analyst" data-role="analyst">
+        <div class="particles" id="p-analyst"></div>
+        <div class="accent-bar" id="bar-analyst" style="background:linear-gradient(180deg,#a855f7,#c084fc,#a855f7)"></div>
+        <div class="card-icon-wrap">🔬</div>
+        <div class="card-text">
+          <div class="card-title" style="color:#a855f7">Analyst</div>
+          <div class="card-meta">
+            <span class="card-badge" style="background:rgba(168,85,247,.12);color:#a855f7;border:1px solid rgba(168,85,247,.3)">SCAN ACCESS</span>
+          </div>
+          <div class="card-desc">Scan pages · alerts · threat explanation</div>
+        </div>
+        <div class="card-check" id="check-analyst"></div>
+      </div>
+ 
+      <!-- VIEWER -->
+      <div class="role-card" id="card-viewer" data-role="viewer">
+        <div class="particles" id="p-viewer"></div>
+        <div class="accent-bar" id="bar-viewer" style="background:linear-gradient(180deg,#7cffd4,#a8ffee,#7cffd4)"></div>
+        <div class="card-icon-wrap">👁</div>
+        <div class="card-text">
+          <div class="card-title" style="color:#7cffd4">Viewer</div>
+          <div class="card-meta">
+            <span class="card-badge" style="background:rgba(124,255,212,.12);color:#7cffd4;border:1px solid rgba(124,255,212,.25)">READ ONLY</span>
+          </div>
+          <div class="card-desc">Overview dashboard · read-only access</div>
+        </div>
+        <div class="card-check" id="check-viewer"></div>
+      </div>
+ 
     </div>
-
-    <button type="submit"
-            class="rs-submit-btn"
-            id="submitBtn">
-      Enter Sentinel →
+ 
+    <button type="submit" class="enter-btn" id="enterBtn" disabled>
+      Enter Sentinel &nbsp;→
     </button>
   </form>
-
-  <p class="rs-note">
-    No login required — your role is stored in the browser session only.<br>
-    You can switch roles at any time from the sidebar.
+ 
+  <p class="foot-note">
+    Session-scoped &nbsp;·&nbsp; No persistent storage<br>
+    <span>Switch roles at any time from the sidebar</span>
   </p>
-
+ 
 </div>
-
+ 
+ 
+<!-- ADMIN LOGIN MODAL -->
+<div class="modal-overlay" id="adminModal">
+  <div class="modal-backdrop" id="modalBackdrop"></div>
+  <div class="modal-box">
+    <div class="modal-top-line"></div>
+    <div class="modal-head">
+      <div class="modal-icon-ring">
+        <span class="modal-icon-emoji">🔐</span>
+      </div>
+      <div class="modal-title">ADMIN ACCESS</div>
+      <div class="modal-sub">CREDENTIALS REQUIRED TO PROCEED</div>
+    </div>
+    <form id="adminLoginForm" novalidate>
+      <div class="field-group">
+        <label class="field-label" for="adminUser">
+          <span class="field-num">01</span>USERNAME
+        </label>
+        <div class="field-wrap">
+          <input type="text" id="adminUser" class="field-input valid-field"
+                 placeholder="Enter Username" autocomplete="username" spellcheck="false">
+        </div>
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="adminPass">
+          <span class="field-num">02</span>PASSWORD
+        </label>
+        <div class="field-wrap">
+          <input type="password" id="adminPass" class="field-input"
+                 placeholder="••••••••••••" autocomplete="current-password">
+          <button type="button" id="pwToggle" class="pw-toggle" aria-label="Toggle password">👁</button>
+        </div>
+      </div>
+      <div class="modal-error" id="modalError">
+        <div class="error-icon">!</div>
+        <span id="errorText">Invalid credentials. Access denied.</span>
+      </div>
+      <div class="modal-actions">
+        <button type="button" id="cancelBtn" class="btn btn-cancel">CANCEL</button>
+        <button type="submit"               class="btn btn-login"  id="loginBtn">LOGIN</button>
+      </div>
+    </form>
+    <div class="modal-foot">SYS&nbsp;::&nbsp;AUTH_GATE_v2.4&nbsp;::&nbsp;AES-256</div>
+  </div>
+</div>
+ 
+ 
 <script>
-"use strict";
-
-document.querySelectorAll(".rs-card").forEach(function (card) {
-    var color    = card.dataset.color || "#388bfd";
-    var roleKey  = card.dataset.role  || "";
-    var titleEl  = document.getElementById("title-" + roleKey);
-    if (titleEl) {
-        titleEl.style.color = color;
-    }
-});
-
-document.querySelectorAll(".rs-card").forEach(function (card) {
-    card.addEventListener("click", function () {
-        selectRole(card.dataset.role, card.dataset.color);
+/* ═══════════════════════════════════════
+   COSMIC BACKGROUND
+═══════════════════════════════════════ */
+(function(){
+  const canvas = document.getElementById('cosmos');
+  const ctx = canvas.getContext('2d');
+  let W, H, stars, nebulae, shooters;
+ 
+  function resize(){
+    W = canvas.width  = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    initScene();
+  }
+ 
+  function rand(a, b){ return a + Math.random() * (b - a); }
+  function randInt(a, b){ return Math.floor(rand(a, b)); }
+ 
+  function initScene(){
+    /* Stars */
+    stars = Array.from({length: 280}, () => ({
+      x: rand(0, W),
+      y: rand(0, H),
+      r: rand(0.3, 2),
+      alpha: rand(0.2, 1),
+      twinkleSpeed: rand(0.005, 0.025),
+      twinklePhase: rand(0, Math.PI * 2),
+      color: Math.random() > 0.85 ? (Math.random() > 0.5 ? '#b0d4ff' : '#ffd0b0') : '#ffffff'
+    }));
+ 
+    /* Nebula clouds */
+    nebulae = Array.from({length: 5}, () => ({
+      x: rand(0, W),
+      y: rand(0, H),
+      rx: rand(80, 220),
+      ry: rand(50, 140),
+      hue: [210, 260, 300, 180, 30][randInt(0,5)],
+      alpha: rand(0.025, 0.07),
+      drift: rand(-0.04, 0.04)
+    }));
+ 
+    /* Shooting stars */
+    shooters = [];
+  }
+ 
+  function spawnShooter(){
+    if(shooters.length > 4) return;
+    const side = Math.random() > 0.5;
+    shooters.push({
+      x:  side ? rand(0, W * 0.6) : rand(W * 0.2, W),
+      y:  rand(0, H * 0.5),
+      vx: rand(4, 9) * (side ? 1 : -1),
+      vy: rand(1.5, 4),
+      len: rand(60, 160),
+      life: 1,
+      decay: rand(0.018, 0.04),
+      color: Math.random() > 0.5 ? '#a0c8ff' : '#ffe0a0'
     });
-});
-
-function selectRole(roleKey, color) {
-    document.querySelectorAll(".rs-card").forEach(function (c) {
-        c.classList.remove("selected");
-        c.style.borderColor = "#30363d";
-        var check = document.getElementById("check-" + c.dataset.role);
-        if (check) {
-            check.textContent       = "";
-            check.style.background  = "transparent";
-            check.style.borderColor = "#30363d";
-        }
+  }
+ 
+  let t = 0;
+  function draw(){
+    ctx.clearRect(0, 0, W, H);
+ 
+    /* Nebulae */
+    nebulae.forEach(n => {
+      n.x += n.drift;
+      if(n.x > W + 250) n.x = -250;
+      if(n.x < -250)    n.x = W + 250;
+      const g = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, Math.max(n.rx, n.ry));
+      g.addColorStop(0,   `hsla(${n.hue},80%,60%,${n.alpha})`);
+      g.addColorStop(0.5, `hsla(${n.hue},70%,50%,${n.alpha * 0.5})`);
+      g.addColorStop(1,   `hsla(${n.hue},60%,40%,0)`);
+      ctx.save();
+      ctx.scale(1, n.ry / n.rx);
+      ctx.beginPath();
+      ctx.arc(n.x, n.y * (n.rx / n.ry), n.rx, 0, Math.PI * 2);
+      ctx.fillStyle = g;
+      ctx.fill();
+      ctx.restore();
     });
-
-    var card  = document.getElementById("card-"  + roleKey);
-    var check = document.getElementById("check-" + roleKey);
-
-    if (card) {
-        card.classList.add("selected");
-        card.style.borderColor = color;
+ 
+    /* Stars */
+    stars.forEach(s => {
+      const flicker = Math.sin(t * s.twinkleSpeed + s.twinklePhase) * 0.35 + 0.65;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r * flicker, 0, Math.PI * 2);
+      ctx.globalAlpha = s.alpha * flicker;
+      ctx.fillStyle = s.color;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    });
+ 
+    /* Distant galaxy clusters */
+    if(t % 1 === 0){
+      ctx.save();
+      ctx.globalAlpha = 0.12;
+      [[W*0.15, H*0.25], [W*0.8, H*0.7], [W*0.5, H*0.45]].forEach(([cx,cy]) => {
+        const g = ctx.createRadialGradient(cx,cy,2,cx,cy,30);
+        g.addColorStop(0, '#ffffff');
+        g.addColorStop(1, 'transparent');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 30, 0, Math.PI*2);
+        ctx.fill();
+      });
+      ctx.restore();
     }
-    if (check) {
-        check.textContent       = "✓";
-        check.style.background  = color;
-        check.style.borderColor = color;
+ 
+    /* Shooting stars */
+    if(Math.random() < 0.008) spawnShooter();
+    shooters = shooters.filter(s => s.life > 0);
+    shooters.forEach(s => {
+      ctx.save();
+      const grad = ctx.createLinearGradient(s.x - s.vx * s.len/10, s.y - s.vy * s.len/10, s.x, s.y);
+      grad.addColorStop(0, 'transparent');
+      grad.addColorStop(1, s.color.replace(')', `,${s.life * 0.9})`).replace('rgb', 'rgba'));
+      ctx.strokeStyle = s.color;
+      ctx.globalAlpha = s.life * 0.8;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(s.x - s.vx * s.len/10, s.y - s.vy * s.len/10);
+      ctx.lineTo(s.x, s.y);
+      ctx.stroke();
+      ctx.restore();
+      s.x += s.vx;
+      s.y += s.vy;
+      s.life -= s.decay;
+    });
+ 
+    /* Slow aurora at bottom */
+    const auroraY = H * 0.82;
+    for(let i = 0; i < 3; i++){
+      const phase = t * 0.002 + i * 1.4;
+      const a = ctx.createLinearGradient(0, auroraY - 80, 0, auroraY + 40);
+      const hue = 190 + Math.sin(phase) * 40;
+      a.addColorStop(0, `hsla(${hue},90%,60%,0)`);
+      a.addColorStop(0.5, `hsla(${hue},80%,55%,0.04)`);
+      a.addColorStop(1, `hsla(${hue},70%,45%,0)`);
+      ctx.fillStyle = a;
+      ctx.fillRect(0, auroraY - 80, W, 120);
     }
-
-    document.getElementById("roleInput").value = roleKey;
-
-    var btn = document.getElementById("submitBtn");
-    btn.classList.add("active");
-    btn.style.background = color;
+ 
+    t++;
+    requestAnimationFrame(draw);
+  }
+ 
+  window.addEventListener('resize', resize);
+  resize();
+  draw();
+})();
+ 
+ 
+/* ═══════════════════════════════════════
+   CARD PARTICLE BURST ON HOVER
+═══════════════════════════════════════ */
+const cardParticleColors = {
+  'card-admin':   ['#ff5555','#ff8888','#ffaaaa','#ff3333'],
+  'card-analyst': ['#4d9fff','#88c4ff','#aaddff','#3388ff'],
+  'card-viewer':  ['#44ee88','#88ffaa','#aaffcc','#22cc66']
+};
+ 
+document.querySelectorAll('.role-card').forEach(card => {
+  const container = card.querySelector('.particles');
+  let particles = [];
+  let animating  = false;
+  const colors   = cardParticleColors[card.id] || ['#ffffff'];
+ 
+  function burst(){
+    if(animating) return;
+    animating = true;
+    for(let i = 0; i < 16; i++){
+      const p = document.createElement('span');
+      const angle = (i / 16) * Math.PI * 2 + Math.random() * 0.4;
+      const dist  = 40 + Math.random() * 80;
+      const size  = 2 + Math.random() * 3;
+      const color = colors[Math.floor(Math.random() * colors.length)];
+      const startX = 50 + (Math.random() - 0.5) * 30;
+      const startY = 50 + (Math.random() - 0.5) * 30;
+      p.style.cssText = `
+        left:${startX}%;top:${startY}%;
+        width:${size}px;height:${size}px;
+        background:${color};
+        border-radius:50%;
+        position:absolute;
+        pointer-events:none;
+        box-shadow:0 0 ${size*3}px ${color};
+        transition: transform 0.7s cubic-bezier(.2,0,.8,1), opacity 0.7s ease;
+        opacity:0.9;
+      `;
+      container.appendChild(p);
+      particles.push(p);
+      const tx = Math.cos(angle) * dist;
+      const ty = Math.sin(angle) * dist;
+      requestAnimationFrame(() => {
+        p.style.transform = `translate(${tx}px,${ty}px) scale(0)`;
+        p.style.opacity   = '0';
+      });
+    }
+    setTimeout(() => {
+      particles.forEach(p => p.remove());
+      particles = [];
+      animating = false;
+    }, 750);
+  }
+ 
+  card.addEventListener('mouseenter', burst);
+});
+ 
+ 
+/* ═══════════════════════════════════════
+   ROLE SELECTION
+═══════════════════════════════════════ */
+const cards       = document.querySelectorAll('.role-card');
+const enterBtn    = document.getElementById('enterBtn');
+const roleInput   = document.getElementById('roleInput');
+const adminModal  = document.getElementById('adminModal');
+ 
+const roleColors = {
+  admin:   '#ff5555',
+  analyst: '#4d9fff',
+  viewer:  '#44ee88'
+};
+ 
+let selectedRole = null;
+ 
+cards.forEach(card => {
+  card.addEventListener('click', () => {
+    const role = card.dataset.role;
+    if(role === 'admin'){
+      adminModal.classList.add('open');
+      document.getElementById('adminUser').focus();
+      return;
+    }
+    selectRole(card, role);
+  });
+});
+ 
+function selectRole(card, role){
+  cards.forEach(c => {
+    c.classList.remove('selected');
+    const chk = c.querySelector('.card-check');
+    chk.textContent = '';
+    chk.style.background   = '';
+    chk.style.borderColor  = '';
+    chk.style.boxShadow    = '';
+  });
+  card.classList.add('selected');
+  selectedRole = role;
+  roleInput.value = role;
+  const chk = card.querySelector('.card-check');
+  const col = roleColors[role];
+  chk.textContent  = '✓';
+  chk.style.background  = col;
+  chk.style.borderColor = col;
+  chk.style.boxShadow   = `0 0 14px ${col}`;
+  enterBtn.disabled = false;
+  enterBtn.classList.add('active');
 }
+ 
+/* ═══════════════════════════════════════
+   ADMIN MODAL
+═══════════════════════════════════════ */
+const adminLoginForm = document.getElementById('adminLoginForm');
+const cancelBtn      = document.getElementById('cancelBtn');
+const modalBackdrop  = document.getElementById('modalBackdrop');
+const loginBtn       = document.getElementById('loginBtn');
+const modalError     = document.getElementById('modalError');
+const pwToggle       = document.getElementById('pwToggle');
+const adminPass      = document.getElementById('adminPass');
+ 
+function closeModal(){
+  adminModal.classList.remove('open');
+  modalError.classList.remove('show');
+}
+cancelBtn.addEventListener('click', closeModal);
+modalBackdrop.addEventListener('click', closeModal);
+document.addEventListener('keydown', e => { if(e.key === 'Escape') closeModal(); });
+ 
+pwToggle.addEventListener('click', () => {
+  adminPass.type = adminPass.type === 'password' ? 'text' : 'password';
+  pwToggle.textContent = adminPass.type === 'password' ? '👁' : '🙈';
+});
+ 
+adminLoginForm.addEventListener('submit', e => {
+  e.preventDefault();
+  const user = document.getElementById('adminUser').value.trim();
+  const pass = adminPass.value;
+  if(!user || !pass){
+    showError('Please enter both username and password.');
+    return;
+  }
+  loginBtn.disabled = true;
+  loginBtn.innerHTML = '<span class="btn-spinner"></span>Verifying...';
+  setTimeout(() => {
+    loginBtn.disabled = false;
+    loginBtn.innerHTML = 'LOGIN';
+    if(user === 'admin' && pass === 'admin123'){
+      loginBtn.classList.add('success');
+      loginBtn.textContent = '✓ GRANTED';
+      document.getElementById('usernameInput').value = user;
+      document.getElementById('passwordInput').value = pass;
+      setTimeout(() => {
+        closeModal();
+        selectRole(document.getElementById('card-admin'), 'admin');
+        loginBtn.classList.remove('success');
+        loginBtn.textContent = 'LOGIN';
+      }, 800);
+    } else {
+      showError('Invalid credentials. Access denied.');
+    }
+  }, 900);
+});
+ 
+function showError(msg){
+  document.getElementById('errorText').textContent = msg;
+  modalError.classList.remove('show');
+  void modalError.offsetWidth;
+  modalError.classList.add('show');
+}
+ 
+document.getElementById('roleForm').addEventListener('submit', e => {
+  if(!selectedRole){ e.preventDefault(); }
+});
 </script>
-
 </body>
 </html>
