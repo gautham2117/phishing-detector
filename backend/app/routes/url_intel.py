@@ -8,7 +8,7 @@ from flask import (
 )
 from backend.app.models import URLScan
 from backend.app.database import db
-from backend.app.routes.dashboard import role_required
+from backend.app.auth import role_required
 
 logger       = logging.getLogger(__name__)
 url_intel_bp = Blueprint("url_intel", __name__)
@@ -70,7 +70,7 @@ def submit_url_batch():
             f"{_api()}/api/scan/url/batch",
             json=urls,
             params={"email_scan_id": email_scan_id} if email_scan_id else {},
-            timeout=120
+            timeout=30
         )
         return jsonify(resp.json()), resp.status_code
 

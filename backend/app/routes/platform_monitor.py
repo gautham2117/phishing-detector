@@ -15,7 +15,7 @@ from flask import (
 
 from backend.app.database import db
 from backend.app.models   import MonitoredTarget, MonitorScanResult
-from backend.app.routes.dashboard import role_required
+from backend.app.auth import role_required
 
 logger      = logging.getLogger(__name__)
 platform_bp = Blueprint("platform_bp", __name__, url_prefix="/platform")

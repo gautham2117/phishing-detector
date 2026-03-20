@@ -16,7 +16,7 @@ from flask import (
 
 from backend.app.database import db
 from backend.app.models   import AIDetectionScan
-from backend.app.routes.dashboard import role_required
+from backend.app.auth import role_required
 
 logger = logging.getLogger(__name__)
 ai_bp  = Blueprint("ai_bp", __name__, url_prefix="/ai")

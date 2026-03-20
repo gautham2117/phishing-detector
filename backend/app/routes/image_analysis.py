@@ -15,7 +15,7 @@ from flask import (
 
 from backend.app.database import db
 from backend.app.models   import ImageAnalysisScan
-from backend.app.routes.dashboard import role_required
+from backend.app.auth import role_required
 
 logger   = logging.getLogger(__name__)
 image_bp = Blueprint("image_bp", __name__, url_prefix="/image")

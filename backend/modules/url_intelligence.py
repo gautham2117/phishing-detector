@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
  
-NETWORK_TIMEOUT = 8
+NETWORK_TIMEOUT = 5
  
 SKIP_DOMAINS = {"localhost", "127.0.0.1", "0.0.0.0", "example.com"}
  
@@ -142,7 +142,7 @@ def _safe_date(raw) -> Optional[datetime.datetime]:
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
  
-def analyze_url(raw_url: str, _skip_subdomains: bool = False) -> dict:
+def analyze_url(raw_url: str, _skip_subdomains: bool = True) -> dict:
     """
     Run the full six-layer intelligence stack on a single URL.
  
@@ -183,25 +183,25 @@ def analyze_url(raw_url: str, _skip_subdomains: bool = False) -> dict:
         future_geo   = executor.submit(_ip_and_geo, domain)
  
         try:
-            whois_data = future_whois.result(timeout=15)
+            whois_data = future_whois.result(timeout=8)
         except Exception as e:
             logger.warning("WHOIS future failed for %s: %s", domain, e)
             whois_data = {"error": str(e)}
  
         try:
-            dns_data = future_dns.result(timeout=15)
+            dns_data = future_dns.result(timeout=8)
         except Exception as e:
             logger.warning("DNS future failed for %s: %s", domain, e)
             dns_data = {"error": str(e)}
  
         try:
-            ssl_data = future_ssl.result(timeout=15)
+            ssl_data = future_ssl.result(timeout=8)
         except Exception as e:
             logger.warning("SSL future failed for %s: %s", domain, e)
             ssl_data = {"has_ssl": False, "is_valid": False, "error": str(e)}
  
         try:
-            geo_data = future_geo.result(timeout=15)
+            geo_data = future_geo.result(timeout=8)
         except Exception as e:
             logger.warning("Geo future failed for %s: %s", domain, e)
             geo_data = {

@@ -11,7 +11,7 @@ from flask import (
     Blueprint, render_template, request,
     jsonify, current_app, Response
 )
-from backend.app.routes.dashboard import role_required
+from backend.app.auth import role_required
 
 logger    = logging.getLogger(__name__)
 alerts_bp = Blueprint("alerts_bp", __name__, url_prefix="/alerts")

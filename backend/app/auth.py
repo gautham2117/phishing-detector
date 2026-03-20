@@ -2,9 +2,18 @@
 import functools
 from flask import session, request, redirect, url_for, render_template
 
-ROLE_HIERARCHY = ["visitor", "analyst", "admin"]
+# Role hierarchy — higher index = more privilege
+ROLE_HIERARCHY = ["viewer", "analyst", "admin"]
 
 def role_required(*allowed_roles):
+    """
+    Decorator that restricts a route to the given roles.
+    Usage:
+        @role_required('admin')
+        @role_required('analyst', 'admin')
+    Redirects to role select if no role in session.
+    Shows access_denied page if role is not allowed.
+    """
     def decorator(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
@@ -19,11 +28,6 @@ def role_required(*allowed_roles):
             return fn(*args, **kwargs)
         return wrapper
     return decorator
-
-
-def get_current_role() -> str:
-    return session.get("role", "")
-
 
 
 def has_access(role: str, *allowed_roles) -> bool:

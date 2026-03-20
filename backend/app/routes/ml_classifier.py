@@ -5,7 +5,7 @@ from flask import (
     Blueprint, render_template, request,
     jsonify, current_app
 )
-from backend.app.routes.dashboard import role_required
+from backend.app.auth import role_required
 
 logger = logging.getLogger(__name__)
 ml_bp  = Blueprint("ml_bp", __name__)

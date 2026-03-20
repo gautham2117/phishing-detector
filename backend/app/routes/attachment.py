@@ -24,7 +24,7 @@ from flask import (
 )
 from backend.app.models import AttachmentScan
 from backend.app.database import db
-from backend.app.routes.dashboard import role_required
+from backend.app.auth import role_required
 
 
 logger        = logging.getLogger(__name__)
@@ -38,6 +38,7 @@ def _api():
 # ── Page ──────────────────────────────────────────────────────────────────────
 
 @attachment_bp.route("/")
+@role_required("admin", "analyst")
 def attachment_page():
     recent = (
         AttachmentScan.query
@@ -51,6 +52,7 @@ def attachment_page():
 # ── Single file scan ──────────────────────────────────────────────────────────
 
 @attachment_bp.route("/scan", methods=["POST"])
+@role_required("admin", "analyst")
 def submit_attachment():
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
@@ -80,7 +82,7 @@ def submit_attachment():
             f"{_api()}/api/scan/file",
             files=files_payload,
             data=data_payload,
-            timeout=90
+            timeout=45
         )
         return jsonify(resp.json()), resp.status_code
 
@@ -96,6 +98,7 @@ def submit_attachment():
 # ── Batch scan ────────────────────────────────────────────────────────────────
 
 @attachment_bp.route("/scan/batch", methods=["POST"])
+@role_required("admin", "analyst")
 def submit_attachment_batch():
     uploaded_files = request.files.getlist("files")
     email_scan_id  = request.form.get("email_scan_id", None)
@@ -135,6 +138,7 @@ def submit_attachment_batch():
 # FIX: was returning a raw list [] — JS expects {status, scans, total}
 
 @attachment_bp.route("/history", methods=["GET"])
+@role_required("admin", "analyst")
 def attachment_history():
     limit = min(int(request.args.get("limit", 20)), 100)
     scans = (
@@ -183,6 +187,7 @@ def attachment_history():
 # ── Detail ────────────────────────────────────────────────────────────────────
 
 @attachment_bp.route("/detail/<int:scan_id>", methods=["GET"])
+@role_required("admin", "analyst")
 def attachment_detail(scan_id: int):
     scan = AttachmentScan.query.get_or_404(scan_id)
 

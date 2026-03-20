@@ -7,7 +7,7 @@ from flask import (
 )
 from backend.app.models import EmailScan, URLScan
 from backend.app.database import db
-from backend.app.routes.dashboard import role_required
+from backend.app.auth import role_required
 
 logger       = logging.getLogger(__name__)
 email_scan_bp = Blueprint("email_scan", __name__)
@@ -44,7 +44,7 @@ def submit_email():
                 f"{fastapi_base}/api/scan/email/upload",
                 files={"file": (eml_file.filename, eml_file.read(), "message/rfc822")},
                 data={"submitter": "dashboard_user"},
-                timeout=60
+                timeout=30
             )
             return jsonify(response.json()), response.status_code
 

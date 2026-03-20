@@ -9,7 +9,7 @@ from flask import (
 from backend.app.models import NetworkScan, PortResult
 from backend.app.database import db
 from backend.modules.network_scanner import is_demo_target
-from backend.app.routes.dashboard import role_required
+from backend.app.auth import role_required
 
 logger         = logging.getLogger(__name__)
 network_scan_bp = Blueprint("network_scan", __name__)
