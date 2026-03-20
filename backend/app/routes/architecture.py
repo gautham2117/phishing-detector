@@ -11,6 +11,7 @@ from flask import (
     Blueprint, render_template, request,
     jsonify, current_app
 )
+from backend.app.auth import role_required
 
 logger           = logging.getLogger(__name__)
 architecture_bp  = Blueprint(
@@ -27,6 +28,7 @@ def _api():
 # ── Page ──────────────────────────────────────────────────────────────────────
 
 @architecture_bp.route("/")
+@role_required("admin")
 def index():
     return render_template("architecture.html")
 
@@ -34,6 +36,7 @@ def index():
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @architecture_bp.route("/health")
+@role_required("admin")
 def health():
     try:
         resp = http_requests.get(
@@ -49,6 +52,7 @@ def health():
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
 @architecture_bp.route("/metrics")
+@role_required("admin")
 def metrics():
     try:
         resp = http_requests.get(
@@ -64,6 +68,7 @@ def metrics():
 # ── Migration plan ────────────────────────────────────────────────────────────
 
 @architecture_bp.route("/migration-plan")
+@role_required("admin")
 def migration_plan():
     try:
         resp = http_requests.get(

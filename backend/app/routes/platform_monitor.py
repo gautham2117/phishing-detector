@@ -15,6 +15,7 @@ from flask import (
 
 from backend.app.database import db
 from backend.app.models   import MonitoredTarget, MonitorScanResult
+from backend.app.routes.dashboard import role_required
 
 logger      = logging.getLogger(__name__)
 platform_bp = Blueprint("platform_bp", __name__, url_prefix="/platform")
@@ -29,6 +30,8 @@ def _api():
 # ── Page ──────────────────────────────────────────────────────────────────────
 
 @platform_bp.route("/")
+@role_required("admin", "analyst")
+
 def index():
     return render_template("platform_monitor.html")
 
@@ -36,6 +39,7 @@ def index():
 # ── Add target ────────────────────────────────────────────────────────────────
 
 @platform_bp.route("/targets/add", methods=["POST"])
+@role_required("admin", "analyst")
 def add_target():
     payload = request.get_json(silent=True) or {}
     if not payload.get("url"):
@@ -54,6 +58,7 @@ def add_target():
 # ── Remove target ─────────────────────────────────────────────────────────────
 
 @platform_bp.route("/targets/<int:target_id>/remove", methods=["DELETE"])
+@role_required("admin", "analyst")
 def remove_target(target_id):
     try:
         resp = http_requests.delete(
@@ -69,6 +74,7 @@ def remove_target(target_id):
 # ── Manual scan ───────────────────────────────────────────────────────────────
 
 @platform_bp.route("/targets/<int:target_id>/scan", methods=["POST"])
+@role_required("admin", "analyst")
 def manual_scan(target_id):
     try:
         resp = http_requests.post(
@@ -86,6 +92,7 @@ def manual_scan(target_id):
 # ── List targets ──────────────────────────────────────────────────────────────
 
 @platform_bp.route("/targets")
+@role_required("admin", "analyst")
 def list_targets():
     try:
         resp = http_requests.get(
@@ -100,6 +107,8 @@ def list_targets():
 # ── Target scan history ───────────────────────────────────────────────────────
 
 @platform_bp.route("/targets/<int:target_id>/history")
+@role_required("admin", "analyst")
+
 def target_history(target_id):
     limit = request.args.get("limit", 20)
     try:
@@ -116,6 +125,7 @@ def target_history(target_id):
 # ── Unified feed ──────────────────────────────────────────────────────────────
 
 @platform_bp.route("/feed")
+@role_required("admin", "analyst")
 def unified_feed():
     limit = request.args.get("limit", 50)
     try:
@@ -132,6 +142,8 @@ def unified_feed():
 # ── Poll due targets ──────────────────────────────────────────────────────────
 
 @platform_bp.route("/poll", methods=["POST"])
+@role_required("admin", "analyst")
+
 def poll():
     try:
         resp = http_requests.post(

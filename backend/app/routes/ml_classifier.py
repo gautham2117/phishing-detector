@@ -5,6 +5,7 @@ from flask import (
     Blueprint, render_template, request,
     jsonify, current_app
 )
+from backend.app.routes.dashboard import role_required
 
 logger = logging.getLogger(__name__)
 ml_bp  = Blueprint("ml_bp", __name__)
@@ -15,11 +16,13 @@ def _api():
 
 
 @ml_bp.route("/ml/classifier", methods=["GET"])
+@role_required("admin", "analyst")
 def ml_classifier_page():
     return render_template("ml_classifier.html")
 
 
 @ml_bp.route("/ml/scan", methods=["POST"])
+@role_required("admin", "analyst")
 def ml_scan():
     data = request.get_json() or {}
     url  = data.get("url", "").strip()
@@ -45,6 +48,7 @@ def ml_scan():
 
 
 @ml_bp.route("/ml/scan/batch", methods=["POST"])
+@role_required("admin", "analyst")
 def ml_scan_batch():
     data = request.get_json() or {}
     urls = data.get("urls", [])

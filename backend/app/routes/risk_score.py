@@ -12,6 +12,7 @@ import logging
 
 import requests as http_requests
 from flask import Blueprint, render_template, request, jsonify, current_app
+from backend.app.routes.dashboard import role_required
 
 logger        = logging.getLogger(__name__)
 risk_score_bp = Blueprint("risk_score_bp", __name__, url_prefix="/risk")
@@ -24,12 +25,14 @@ def _api():
 
 
 @risk_score_bp.route("/")
+@role_required("admin", "analyst")
 def index():
     return render_template("risk_score.html")
 
 
 # ── Manual aggregate (existing) ───────────────────────────────────────────────
 @risk_score_bp.route("/aggregate", methods=["POST"])
+@role_required("admin", "analyst")
 def aggregate():
     payload = request.get_json(silent=True) or {}
     ids = [
@@ -61,6 +64,7 @@ def aggregate():
 
 # ── Auto aggregate (NEW) ──────────────────────────────────────────────────────
 @risk_score_bp.route("/aggregate/auto", methods=["POST"])
+@role_required("admin", "analyst")
 def aggregate_auto():
     """
     Proxy to FastAPI /api/risk/aggregate/auto.
@@ -84,6 +88,7 @@ def aggregate_auto():
 
 # ── Module status probe (NEW) ─────────────────────────────────────────────────
 @risk_score_bp.route("/status", methods=["GET"])
+@role_required("admin", "analyst")
 def status():
     """
     Proxy to FastAPI /api/risk/status.
@@ -103,6 +108,7 @@ def status():
 
 # ── History (existing) ────────────────────────────────────────────────────────
 @risk_score_bp.route("/history")
+@role_required("admin", "analyst")
 def history():
     limit = request.args.get("limit", 20)
     try:
@@ -117,6 +123,7 @@ def history():
 
 
 @risk_score_bp.route("/history/<int:record_id>")
+@role_required("admin", "analyst")
 def detail(record_id):
     try:
         resp = http_requests.get(

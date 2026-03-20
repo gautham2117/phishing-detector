@@ -11,6 +11,7 @@ from flask import (
     Blueprint, render_template, request,
     jsonify, current_app, Response
 )
+from backend.app.routes.dashboard import role_required
 
 logger    = logging.getLogger(__name__)
 alerts_bp = Blueprint("alerts_bp", __name__, url_prefix="/alerts")
@@ -25,6 +26,7 @@ def _api():
 # ── Page ──────────────────────────────────────────────────────────────────────
 
 @alerts_bp.route("/")
+@role_required("admin", "analyst")
 def index():
     return render_template("alerts.html")
 
@@ -32,6 +34,7 @@ def index():
 # ── List alerts ───────────────────────────────────────────────────────────────
 
 @alerts_bp.route("/list")
+@role_required("admin", "analyst")
 def list_alerts():
     params = {
         k: request.args.get(k)
@@ -54,6 +57,7 @@ def list_alerts():
 # ── Alert stats ───────────────────────────────────────────────────────────────
 
 @alerts_bp.route("/stats")
+@role_required("admin", "analyst") 
 def stats():
     try:
         resp = http_requests.get(
@@ -68,6 +72,7 @@ def stats():
 # ── Alert detail ──────────────────────────────────────────────────────────────
 
 @alerts_bp.route("/<int:alert_id>")
+@role_required("admin", "analyst")
 def alert_detail(alert_id):
     try:
         resp = http_requests.get(
@@ -82,6 +87,7 @@ def alert_detail(alert_id):
 # ── Create alert (manual) ─────────────────────────────────────────────────────
 
 @alerts_bp.route("/create", methods=["POST"])
+@role_required("admin", "analyst")
 def create_alert():
     payload = request.get_json(silent=True) or {}
     try:
@@ -99,6 +105,7 @@ def create_alert():
 # ── Acknowledge ───────────────────────────────────────────────────────────────
 
 @alerts_bp.route("/<int:alert_id>/acknowledge", methods=["POST"])
+@role_required("admin", "analyst")
 def acknowledge(alert_id):
     payload = request.get_json(silent=True) or {}
     try:
@@ -115,6 +122,7 @@ def acknowledge(alert_id):
 # ── Dismiss ───────────────────────────────────────────────────────────────────
 
 @alerts_bp.route("/<int:alert_id>/dismiss", methods=["POST"])
+@role_required("admin", "analyst")
 def dismiss(alert_id):
     payload = request.get_json(silent=True) or {}
     try:
@@ -131,6 +139,8 @@ def dismiss(alert_id):
 # ── Export CSV ────────────────────────────────────────────────────────────────
 
 @alerts_bp.route("/export/csv")
+@role_required("admin", "analyst")
+
 def export_csv():
     params = {
         k: request.args.get(k)
@@ -161,6 +171,7 @@ def export_csv():
 # ── Export PDF ────────────────────────────────────────────────────────────────
 
 @alerts_bp.route("/<int:alert_id>/export/pdf")
+@role_required("admin", "analyst")
 def export_pdf(alert_id):
     try:
         resp = http_requests.get(
@@ -186,6 +197,7 @@ def export_pdf(alert_id):
 # ── Audit log ─────────────────────────────────────────────────────────────────
 
 @alerts_bp.route("/audit")
+@role_required("admin")
 def audit_log():
     limit = request.args.get("limit", 100)
     try:

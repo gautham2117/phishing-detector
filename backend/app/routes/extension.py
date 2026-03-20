@@ -11,6 +11,7 @@ from flask import (
     Blueprint, render_template, request,
     jsonify, current_app
 )
+from backend.app.routes.dashboard import role_required
 
 logger       = logging.getLogger(__name__)
 extension_bp = Blueprint("extension_bp", __name__, url_prefix="/extension")
@@ -25,6 +26,7 @@ def _api():
 # ── Page ──────────────────────────────────────────────────────────────────────
 
 @extension_bp.route("/")
+@role_required("admin", "analyst")
 def index():
     return render_template("extension.html")
 
@@ -54,6 +56,7 @@ def scan():
 # ── History ───────────────────────────────────────────────────────────────────
 
 @extension_bp.route("/history")
+@role_required("admin", "analyst")
 def history():
     limit = request.args.get("limit", 50)
     try:
@@ -70,6 +73,7 @@ def history():
 # ── Status ping ───────────────────────────────────────────────────────────────
 
 @extension_bp.route("/status")
+@role_required("admin", "analyst")
 def status():
     try:
         resp = http_requests.get(

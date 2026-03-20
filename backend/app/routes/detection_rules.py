@@ -5,6 +5,9 @@ from flask import (
     Blueprint, render_template, request,
     jsonify, current_app
 )
+from backend.app.database import db
+from backend.app.routes.dashboard import role_required
+
 
 logger   = logging.getLogger(__name__)
 rules_bp = Blueprint("rules_bp", __name__)
@@ -15,6 +18,7 @@ def _api():
 
 
 @rules_bp.route("/rules", methods=["GET"])
+@role_required("admin", "analyst")
 def detection_rules_page():
     all_rules = []
     try:
@@ -27,6 +31,7 @@ def detection_rules_page():
 
 
 @rules_bp.route("/rules/scan/url", methods=["POST"])
+@role_required("admin", "analyst")
 def scan_url_rules():
     data = request.get_json() or {}
     url  = data.get("url", "").strip()
@@ -46,6 +51,7 @@ def scan_url_rules():
 
 
 @rules_bp.route("/rules/scan/email", methods=["POST"])
+@role_required("admin", "analyst")
 def scan_email_rules():
     data = request.get_json() or {}
     try:
@@ -67,6 +73,7 @@ def scan_email_rules():
 
 
 @rules_bp.route("/rules/list", methods=["GET"])
+@role_required("admin", "analyst")
 def get_rules_list():
     try:
         resp = requests.get(f"{_api()}/api/rules/list", timeout=5)

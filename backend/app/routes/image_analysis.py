@@ -15,6 +15,7 @@ from flask import (
 
 from backend.app.database import db
 from backend.app.models   import ImageAnalysisScan
+from backend.app.routes.dashboard import role_required
 
 logger   = logging.getLogger(__name__)
 image_bp = Blueprint("image_bp", __name__, url_prefix="/image")
@@ -29,6 +30,7 @@ def _api():
 # ── Page ──────────────────────────────────────────────────────────────────────
 
 @image_bp.route("/analysis")
+@role_required("analyst", "admin")
 def index():
     return render_template("image_analysis.html")
 
@@ -36,6 +38,7 @@ def index():
 # ── Image scan ────────────────────────────────────────────────────────────────
 
 @image_bp.route("/analysis/scan", methods=["POST"])
+@role_required("analyst", "admin")
 def scan_image():
     uploaded = request.files.get("file")
     if not uploaded or not uploaded.filename:
@@ -75,6 +78,7 @@ def scan_image():
 # ── History ───────────────────────────────────────────────────────────────────
 
 @image_bp.route("/analysis/history")
+@role_required("analyst", "admin")
 def history():
     try:
         limit   = int(request.args.get("limit", 20))
@@ -110,6 +114,7 @@ def history():
 # ── Detail ────────────────────────────────────────────────────────────────────
 
 @image_bp.route("/analysis/detail/<int:scan_id>")
+@role_required("analyst", "admin")
 def detail(scan_id):
     try:
         r = ImageAnalysisScan.query.get_or_404(scan_id)

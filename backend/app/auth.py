@@ -1,27 +1,29 @@
 # backend/app/auth.py
 import functools
-from flask import session, abort, request, redirect, url_for, flash
+from flask import session, request, redirect, url_for, render_template
 
-# Role hierarchy — higher index = more privilege
 ROLE_HIERARCHY = ["visitor", "analyst", "admin"]
 
 def role_required(*allowed_roles):
-    """
-    Decorator that restricts a route to the given roles.
-    Usage:
-        @role_required('admin')
-        @role_required('analyst', 'admin')
-    Falls back to 'visitor' if no role in session.
-    """
     def decorator(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            current_role = session.get("role", "visitor")
+            current_role = session.get("role", "")
+            if not current_role:
+                return redirect(url_for("dashboard_bp.role_select"))
             if current_role not in allowed_roles:
-                abort(403)
+                return render_template(
+                    "access_denied.html",
+                    path=request.path,
+                ), 403
             return fn(*args, **kwargs)
         return wrapper
     return decorator
+
+
+def get_current_role() -> str:
+    return session.get("role", "")
+
 
 
 def has_access(role: str, *allowed_roles) -> bool:

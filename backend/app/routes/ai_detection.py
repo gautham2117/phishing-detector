@@ -16,6 +16,7 @@ from flask import (
 
 from backend.app.database import db
 from backend.app.models   import AIDetectionScan
+from backend.app.routes.dashboard import role_required
 
 logger = logging.getLogger(__name__)
 ai_bp  = Blueprint("ai_bp", __name__, url_prefix="/ai")
@@ -30,6 +31,7 @@ def _api():
 # ── Page ──────────────────────────────────────────────────────────────────────
 
 @ai_bp.route("/detection")
+@role_required("admin", "analyst")
 def index():
     return render_template("ai_detection.html")
 
@@ -37,6 +39,7 @@ def index():
 # ── Text scan ─────────────────────────────────────────────────────────────────
 
 @ai_bp.route("/detection/scan/text", methods=["POST"])
+@role_required("admin", "analyst")
 def scan_text():
     payload    = request.get_json(silent=True) or {}
     text       = payload.get("text", "").strip()
@@ -62,6 +65,7 @@ def scan_text():
 # ── URL scan ──────────────────────────────────────────────────────────────────
 
 @ai_bp.route("/detection/scan/url", methods=["POST"])
+@role_required("admin", "analyst")
 def scan_url():
     payload = request.get_json(silent=True) or {}
     url     = payload.get("url", "").strip()
@@ -86,6 +90,7 @@ def scan_url():
 # ── File scan ─────────────────────────────────────────────────────────────────
 
 @ai_bp.route("/detection/scan/file", methods=["POST"])
+@role_required("admin", "analyst")
 def scan_file():
     uploaded = request.files.get("file")
     if not uploaded or not uploaded.filename:
@@ -112,6 +117,7 @@ def scan_file():
 # ── History ───────────────────────────────────────────────────────────────────
 
 @ai_bp.route("/detection/history")
+@role_required("admin", "analyst")
 def history():
     try:
         limit   = int(request.args.get("limit", 20))
@@ -143,6 +149,7 @@ def history():
 # ── Detail ────────────────────────────────────────────────────────────────────
 
 @ai_bp.route("/detection/detail/<int:scan_id>")
+@role_required("admin", "analyst")
 def detail(scan_id):
     try:
         r = AIDetectionScan.query.get_or_404(scan_id)

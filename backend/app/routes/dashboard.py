@@ -83,10 +83,11 @@ def is_allowed(path: str) -> bool:
     if cfg["allowed_prefixes"] is None:
         return True   # admin — all allowed
     for prefix in cfg["allowed_prefixes"]:
-        if path == prefix or path.startswith(prefix.rstrip("/") + "/"):
+        # exact match OR path starts with the prefix followed by / or end
+        clean_prefix = prefix.rstrip("/")
+        if path == prefix or path == clean_prefix or path.startswith(clean_prefix + "/"):
             return True
     return False
-
 
 def role_required(f):
     """Decorator that checks role before serving a page."""
@@ -124,7 +125,7 @@ def get_sidebar_config():
         items = [
             item for item in section["items"]
             if any(
-                item["url"] == p   # exact match only
+                item["url"] == p or item["url"].rstrip("/").startswith(p.rstrip("/"))
                 for p in allowed
             )
         ]

@@ -8,6 +8,7 @@ from flask import (
 )
 from backend.app.models import URLScan
 from backend.app.database import db
+from backend.app.routes.dashboard import role_required
 
 logger       = logging.getLogger(__name__)
 url_intel_bp = Blueprint("url_intel", __name__)
@@ -18,6 +19,7 @@ def _api():
 
 
 @url_intel_bp.route("/url/intel", methods=["GET"])
+@role_required("admin", "analyst")
 def url_intel_page():
     recent = (
         URLScan.query
@@ -29,6 +31,7 @@ def url_intel_page():
 
 
 @url_intel_bp.route("/url/submit", methods=["POST"])
+@role_required("admin", "analyst")
 def submit_url():
     data = request.get_json() or {}
     url  = data.get("url", "").strip()
@@ -53,6 +56,7 @@ def submit_url():
 
 
 @url_intel_bp.route("/url/submit/batch", methods=["POST"])
+@role_required("admin", "analyst")
 def submit_url_batch():
     data          = request.get_json() or {}
     urls          = data.get("urls", [])
@@ -77,6 +81,7 @@ def submit_url_batch():
 
 
 @url_intel_bp.route("/url/history", methods=["GET"])
+@role_required("admin", "analyst")
 def url_history():
     scans = (
         URLScan.query
@@ -99,6 +104,7 @@ def url_history():
 
 
 @url_intel_bp.route("/url/detail/<int:scan_id>", methods=["GET"])
+@role_required("admin", "analyst")
 def url_detail(scan_id: int):
     import json as _json
     scan = URLScan.query.get_or_404(scan_id)

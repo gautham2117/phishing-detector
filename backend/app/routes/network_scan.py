@@ -9,6 +9,7 @@ from flask import (
 from backend.app.models import NetworkScan, PortResult
 from backend.app.database import db
 from backend.modules.network_scanner import is_demo_target
+from backend.app.routes.dashboard import role_required
 
 logger         = logging.getLogger(__name__)
 network_scan_bp = Blueprint("network_scan", __name__)
@@ -19,6 +20,7 @@ def _api():
 
 
 @network_scan_bp.route("/network/scan", methods=["GET"])
+@role_required("admin", "analyst")
 def network_scan_page():
     recent = (
         NetworkScan.query
@@ -30,6 +32,7 @@ def network_scan_page():
 
 
 @network_scan_bp.route("/network/submit", methods=["POST"])
+@role_required("admin", "analyst")
 def submit_network_scan():
     data              = request.get_json() or {}
     target            = data.get("target", "").strip()
@@ -105,6 +108,7 @@ def submit_network_scan():
 
 
 @network_scan_bp.route("/network/history", methods=["GET"])
+@role_required("admin", "analyst")
 def network_history():
     scans = (
         NetworkScan.query
@@ -127,6 +131,7 @@ def network_history():
 
 
 @network_scan_bp.route("/network/detail/<int:scan_id>", methods=["GET"])
+@role_required("admin", "analyst")
 def network_detail(scan_id: int):
     scan  = NetworkScan.query.get_or_404(scan_id)
     ports = PortResult.query.filter_by(network_scan_id=scan_id).all()
@@ -157,6 +162,7 @@ def network_detail(scan_id: int):
     })
 
 @network_scan_bp.route("/network/is-demo", methods=["GET"])
+@role_required("admin", "analyst")
 def check_is_demo():
     """Check if a target is on the demo allowlist (for UI consent logic)"""
     target = request.args.get("target", "").strip()

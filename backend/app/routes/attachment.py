@@ -24,6 +24,8 @@ from flask import (
 )
 from backend.app.models import AttachmentScan
 from backend.app.database import db
+from backend.app.routes.dashboard import role_required
+
 
 logger        = logging.getLogger(__name__)
 attachment_bp = Blueprint("attachment_bp", __name__, url_prefix="/attachments")
