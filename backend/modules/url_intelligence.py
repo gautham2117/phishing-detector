@@ -142,7 +142,7 @@ def _safe_date(raw) -> Optional[datetime.datetime]:
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
  
-def analyze_url(raw_url: str, _skip_subdomains: bool = True) -> dict:
+def analyze_url(raw_url: str, _skip_subdomains: bool = False) -> dict:
     """
     Run the full six-layer intelligence stack on a single URL.
  
