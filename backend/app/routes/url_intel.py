@@ -43,7 +43,7 @@ def submit_url():
         resp = requests.post(
             f"{_api()}/api/scan/url",
             json={"url": url, "submitter": "dashboard_user"},
-            timeout=120
+            timeout=60
         )
         return jsonify(resp.json()), resp.status_code
 
@@ -70,7 +70,7 @@ def submit_url_batch():
             f"{_api()}/api/scan/url/batch",
             json=urls,
             params={"email_scan_id": email_scan_id} if email_scan_id else {},
-            timeout=30
+            timeout=60
         )
         return jsonify(resp.json()), resp.status_code
 

@@ -721,13 +721,13 @@ def _enumerate_subdomains(domain: str) -> list:
         f_bruteforce = ex.submit(_dns_bruteforce,   domain)
  
         try:
-            crtsh_found      = f_crtsh.result(timeout=20)
+            crtsh_found      = f_crtsh.result(timeout=8)
         except Exception as e:
             logger.warning("crt.sh lookup failed for %s: %s", domain, e)
             crtsh_found      = []
  
         try:
-            bruteforce_found = f_bruteforce.result(timeout=25)
+            bruteforce_found = f_bruteforce.result(timeout=10)
         except Exception as e:
             logger.warning("DNS bruteforce failed for %s: %s", domain, e)
             bruteforce_found = []
@@ -778,12 +778,12 @@ def _enumerate_subdomains(domain: str) -> list:
     no_score = resolved[MAX_SUBDOMAIN_RISK_SCORE:]
  
     if to_score:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as ex:
             future_map = {
                 ex.submit(_score_subdomain, entry["subdomain"]): i
                 for i, entry in enumerate(to_score)
             }
-            for future in concurrent.futures.as_completed(future_map, timeout=60):
+            for future in concurrent.futures.as_completed(future_map, timeout=20):
                 idx = future_map[future]
                 try:
                     scored = future.result()
@@ -807,7 +807,7 @@ def _crtsh_lookup(domain: str) -> list:
         resp = requests.get(
             "https://crt.sh/",
             params={"q": f"%.{domain}", "output": "json"},
-            timeout=12,
+            timeout=6,
             headers={"Accept": "application/json"}
         )
         if resp.status_code != 200:
@@ -845,8 +845,8 @@ def _dns_bruteforce(domain: str) -> list:
     Uses a thread pool with short per-query timeouts for speed.
     """
     resolver = dns.resolver.Resolver()
-    resolver.timeout  = 2
-    resolver.lifetime = 2
+    resolver.timeout  = 1
+    resolver.lifetime = 1
  
     def _try(prefix: str) -> Optional[str]:
         candidate = f"{prefix}.{domain}"
