@@ -308,7 +308,7 @@ def _normalize_and_unshorten(url: str) -> dict:
             response = session.head(
                 url,
                 allow_redirects=True,
-                timeout=NETWORK_TIMEOUT,
+                timeout=5,
                 headers={"User-Agent": "Mozilla/5.0 (PhishingDetector/1.0)"}
             )
             for hop in response.history:

@@ -40,7 +40,7 @@ def submit_url():
         resp = requests.post(
             f"{_api()}/api/scan/url",
             json={"url": url, "submitter": "dashboard_user"},
-            timeout=90
+            timeout=120
         )
         return jsonify(resp.json()), resp.status_code
 

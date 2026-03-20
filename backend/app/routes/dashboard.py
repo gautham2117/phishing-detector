@@ -124,15 +124,13 @@ def get_sidebar_config():
         items = [
             item for item in section["items"]
             if any(
-                item["url"] == p or
-                item["url"].startswith(p.rstrip("/") + "/")
+                item["url"] == p   # exact match only
                 for p in allowed
             )
         ]
         if items:
             filtered.append({**section, "items": items})
     return filtered
-
 
 def _all_sidebar_items():
     return [
