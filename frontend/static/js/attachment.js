@@ -1,48 +1,5 @@
 "use strict";
 
-// attachments.js
-// Client-side logic for the File & Attachment Analysis page.
-//
-// FIXES IN THIS VERSION:
-//   1. renderResults() — was reading mod.verdict, mod.hashes etc. directly
-//      from module_results root. The actual structure is:
-//        data.module_results.file_analysis.verdict  (not data.module_results.verdict)
-//      Fixed: fa = data.module_results.file_analysis || {}
-//      All render helpers now receive fa (the file_analysis sub-dict).
-//
-//   2. renderVerdict() — verdict was always "SUSPICIOUS" because scan_router
-//      was receiving "Clean" (title case) from analyze_file() and its
-//      label_map only handles "CLEAN" (uppercase). Fixed in file_analyzer.py
-//      (verdict is now uppercase). JS now also normalises to uppercase before
-//      class lookup so it works regardless.
-//
-//   3. renderStrings() — was reading mod.suspicious_strings. The result dict
-//      now exposes both static_findings (list of objects) and suspicious_strings
-//      (list of plain strings). JS reads fa.suspicious_strings correctly.
-//
-//   4. renderDeepFindings() — was reading mod.html_analysis.html_findings etc.
-//      These dicts are now top-level in the result under html_analysis,
-//      pdf_analysis, macro_analysis, zip_analysis. The render function now
-//      reads them from the correct paths.
-//
-//   5. loadHistory() — was checking data.status === "success" but the Flask
-//      route returned a raw array []. Fixed in attachment.py — route now
-//      returns {status, scans, total}. JS unchanged for this fix but now
-//      correctly hits the new envelope.
-//
-// NEW IN THIS VERSION:
-//   6. renderVtResult() — shows VirusTotal hash lookup result (engine count,
-//      known-bad badge, permalink) when vt_result is present in the response.
-//   7. renderTypeMismatch() — shows a warning banner when file extension
-//      disagrees with magic bytes (e.g. EXE disguised as PDF).
-//   8. renderEmbeddedUrls() — shows aggregated embedded URLs from all
-//      analysis types (PDF, HTML, ZIP relationships).
-//   9. renderArchiveContents() — shows structured file list for ZIP/Office
-//      docs with suspicious entries highlighted.
-//  10. renderMacroDetail() — shows VBA stream names and macro keywords.
-//  11. History table now shows entropy bar + YARA hit count.
-
-
 // ── Bootstrap — read URLs from data island ────────────────────────────────────
 var _pd         = document.getElementById("page-data");
 var SCAN_URL    = _pd.dataset.scanUrl;
@@ -159,57 +116,29 @@ function setScanLoading(on) {
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// RESULT RENDERING
-//
-// scan_router.scan_file() response shape:
-// {
-//   status, risk_score, label, recommended_action, explanation,
-//   module_results: {
-//     file_analysis: {          ← FIX: was reading module_results directly
-//       filename, file_type, file_category, file_size,
-//       hashes: {md5, sha1, sha256},
-//       entropy, is_packed, is_high_entropy,
-//       type_mismatch: bool,        NEW
-//       yara_matches: [],
-//       static_findings: [],
-//       suspicious_strings: [],     JS reads this one
-//       pdf_analysis:    {},
-//       macro_analysis:  {},
-//       html_analysis:   {},
-//       zip_analysis:    {},
-//       script_analysis: {},
-//       exe_analysis:    {},
-//       embedded_urls: [],           NEW
-//       vt_result: {} | null,        NEW
-//       known_bad: bool,             NEW
-//       verdict: "CLEAN"|"SUSPICIOUS"|"MALICIOUS",  FIX: uppercase
-//       risk_score, risk_flags, verdict_reasons
-//     }
-//   }
-// }
+// RESULT RENDERING — master dispatcher
 // ════════════════════════════════════════════════════════════════════════════
 
 function renderResults(data) {
-    // FIX: extract the correct sub-dict
+    // Extract the file_analysis sub-dict — all render helpers read from here
     var fa = (data.module_results || {}).file_analysis || {};
 
     renderVerdict(fa, data);
-    renderTypeMismatch(fa);       // NEW
+    renderTypeMismatch(fa);
     renderHashes(fa);
-    renderVtResult(fa);           // NEW
+    renderVtResult(fa);
     renderEntropy(fa);
-    renderYara(fa);
-    renderStrings(fa);
-    renderMacroDetail(fa);        // NEW
+    renderYara(fa);          // ← YARA: reads fa.yara_matches
+    renderStrings(fa);       // ← Suspicious strings: reads fa.suspicious_strings
+    renderMacroDetail(fa);
     renderDeepFindings(fa);
-    renderArchiveContents(fa);    // NEW
-    renderEmbeddedUrls(fa);       // NEW
-    renderPdfUrls(fa);
+    renderArchiveContents(fa);
+    renderEmbeddedUrls(fa);
     renderExplanation(data, fa);
 }
 
-// ── Verdict ──────────────────────────────────────────────────────────────────
-// FIX: reads fa.verdict (not mod.verdict) + normalises to uppercase
+
+// ── Verdict ───────────────────────────────────────────────────────────────────
 function renderVerdict(fa, data) {
     var verdict = (fa.verdict || data.label || "UNKNOWN").toUpperCase();
     var badge   = document.getElementById("verdictBadge");
@@ -229,7 +158,6 @@ function renderVerdict(fa, data) {
     document.getElementById("verdictAction").textContent =
         "Action: " + (actionMap[data.recommended_action] || data.recommended_action || "—");
 
-    // Verdict reasons list (NEW)
     var reasonsEl = document.getElementById("verdictReasons");
     if (reasonsEl) {
         var reasons = fa.verdict_reasons || [];
@@ -245,7 +173,8 @@ function renderVerdict(fa, data) {
     }
 }
 
-// ── Type mismatch warning (NEW) ───────────────────────────────────────────────
+
+// ── Type mismatch warning ─────────────────────────────────────────────────────
 function renderTypeMismatch(fa) {
     var banner = document.getElementById("typeMismatchBanner");
     if (!banner) return;
@@ -261,8 +190,8 @@ function renderTypeMismatch(fa) {
     }
 }
 
+
 // ── Hashes ────────────────────────────────────────────────────────────────────
-// FIX: reads fa.hashes (was mod.hashes)
 function renderHashes(fa) {
     var h = fa.hashes || {};
     document.getElementById("hashMd5").textContent    = h.md5    || "—";
@@ -272,7 +201,8 @@ function renderHashes(fa) {
     if (knownBad) knownBad.style.display = fa.known_bad ? "inline-flex" : "none";
 }
 
-// ── VirusTotal result (NEW) ───────────────────────────────────────────────────
+
+// ── VirusTotal result ─────────────────────────────────────────────────────────
 function renderVtResult(fa) {
     var card = document.getElementById("vtCard");
     if (!card) return;
@@ -305,8 +235,8 @@ function renderVtResult(fa) {
     }
 }
 
+
 // ── Entropy gauge ─────────────────────────────────────────────────────────────
-// FIX: reads fa.entropy
 function renderEntropy(fa) {
     var entropy = parseFloat(fa.entropy) || 0.0;
     document.getElementById("entropyValue").textContent = entropy.toFixed(4);
@@ -331,50 +261,157 @@ function renderEntropy(fa) {
     }
 }
 
-// ── YARA matches ──────────────────────────────────────────────────────────────
-// FIX: reads fa.yara_matches
+
+// ════════════════════════════════════════════════════════════════════════════
+// YARA MATCHES — dynamic rendering
+// Reads: fa.yara_matches  (list of strings or rule-objects from file_analyzer)
+// ════════════════════════════════════════════════════════════════════════════
+
 function renderYara(fa) {
     var matches = fa.yara_matches || [];
-    document.getElementById("yaraCount").textContent = matches.length;
+
+    // Always update the count badge
+    var countEl = document.getElementById("yaraCount");
+    if (countEl) countEl.textContent = matches.length;
+
     var list = document.getElementById("yaraList");
+    if (!list) return;
+
+    // Clear whatever was there before (static placeholder or previous result)
     list.innerHTML = "";
 
     if (matches.length === 0) {
-        list.innerHTML = '<span class="att-empty-note">No YARA rules matched.</span>';
+        // No matches — show clean message
+        var emptySpan = document.createElement("span");
+        emptySpan.className   = "att-empty-note";
+        emptySpan.textContent = "No YARA rules matched — file passed all signature checks.";
+        list.appendChild(emptySpan);
         return;
     }
+
+    // Render each match as a coloured tag
     matches.forEach(function (rule) {
-        var name = typeof rule === "string" ? rule : (rule.rule || JSON.stringify(rule));
-        var sev  = typeof rule === "object" ? (rule.severity || "MEDIUM") : "MEDIUM";
-        var tag  = document.createElement("span");
-        tag.className   = "att-tag att-tag-danger";
-        tag.textContent = name + (sev !== "MEDIUM" ? " [" + sev + "]" : "");
+        // rule may be a plain string or an object {rule, namespace, severity, ...}
+        var ruleName, severity, namespace, meta;
+
+        if (typeof rule === "string") {
+            ruleName  = rule;
+            severity  = "MEDIUM";
+            namespace = "";
+            meta      = "";
+        } else {
+            ruleName  = rule.rule      || rule.name || JSON.stringify(rule);
+            severity  = (rule.severity || "MEDIUM").toUpperCase();
+            namespace = rule.namespace ? "[" + rule.namespace + "] " : "";
+            // Show meta description if present
+            meta = (rule.meta && rule.meta.description)
+                ? " — " + rule.meta.description
+                : "";
+        }
+
+        // Choose colour based on severity
+        var tagClass = "att-tag ";
+        if (severity === "CRITICAL" || severity === "HIGH") {
+            tagClass += "att-tag-danger";
+        } else {
+            tagClass += "att-tag-warn";
+        }
+
+        var tag = document.createElement("span");
+        tag.className = tagClass;
+        tag.title     = namespace + ruleName + meta + " [" + severity + "]";
+        tag.textContent = namespace + ruleName + " [" + severity + "]";
+
         list.appendChild(tag);
     });
+
+    // If more than 10 matches, add a summary badge
+    if (matches.length > 10) {
+        var summaryTag = document.createElement("span");
+        summaryTag.className   = "att-tag att-tag-danger";
+        summaryTag.textContent = "+" + (matches.length - 10) + " more rules…";
+        list.appendChild(summaryTag);
+    }
 }
 
-// ── Suspicious strings ────────────────────────────────────────────────────────
-// FIX: reads fa.suspicious_strings (list of plain strings)
+
+// ════════════════════════════════════════════════════════════════════════════
+// SUSPICIOUS STRINGS — dynamic rendering
+// Reads: fa.suspicious_strings  (list of plain strings)
+//        fa.static_findings     (list of {string, count, context} objects)
+// ════════════════════════════════════════════════════════════════════════════
+
 function renderStrings(fa) {
-    // suspicious_strings is a list of plain strings; static_findings is objects
-    var sus   = fa.suspicious_strings || [];
-    document.getElementById("stringsCount").textContent = sus.length;
-    var list  = document.getElementById("stringsList");
+    // suspicious_strings is a flat list of string names (e.g. "powershell")
+    // static_findings has richer objects with count and context snippets
+    var susStrings   = fa.suspicious_strings   || [];
+    var staticFinds  = fa.static_findings      || [];
+
+    // Prefer static_findings (richer) but fall back to suspicious_strings
+    var useRich = staticFinds.length > 0;
+
+    var countEl = document.getElementById("stringsCount");
+    if (countEl) {
+        countEl.textContent = useRich ? staticFinds.length : susStrings.length;
+    }
+
+    var list = document.getElementById("stringsList");
+    if (!list) return;
+
+    // Clear previous content (removes static placeholder)
     list.innerHTML = "";
 
-    if (sus.length === 0) {
-        list.innerHTML = '<span class="att-empty-note">No suspicious strings found.</span>';
+    var totalItems = useRich ? staticFinds.length : susStrings.length;
+
+    if (totalItems === 0) {
+        var emptySpan = document.createElement("span");
+        emptySpan.className   = "att-empty-note";
+        emptySpan.textContent = "No suspicious strings found in this file.";
+        list.appendChild(emptySpan);
         return;
     }
-    sus.forEach(function (s) {
-        var tag = document.createElement("span");
-        tag.className   = "att-tag att-tag-warn";
-        tag.textContent = typeof s === "string" ? s : (s.string || JSON.stringify(s));
-        list.appendChild(tag);
-    });
+
+    if (useRich) {
+        // Render rich objects: show string name + count badge + context tooltip
+        staticFinds.forEach(function (item) {
+            var strName = item.string  || "";
+            var count   = item.count   || 1;
+            var context = item.context || "";
+
+            var wrapper = document.createElement("span");
+            wrapper.className = "att-tag att-tag-warn";
+            wrapper.style.cursor = "help";
+            wrapper.title = count + " occurrence(s)" +
+                (context ? "\nContext: …" + context + "…" : "");
+
+            // String name
+            var nameText = document.createTextNode(strName);
+            wrapper.appendChild(nameText);
+
+            // Count badge
+            if (count > 1) {
+                var badge = document.createElement("sup");
+                badge.style.cssText = "font-size:10px;margin-left:3px;opacity:.7";
+                badge.textContent   = "×" + count;
+                wrapper.appendChild(badge);
+            }
+
+            list.appendChild(wrapper);
+        });
+    } else {
+        // Render plain strings
+        susStrings.forEach(function (s) {
+            var strName = typeof s === "string" ? s : (s.string || JSON.stringify(s));
+            var tag = document.createElement("span");
+            tag.className   = "att-tag att-tag-warn";
+            tag.textContent = strName;
+            list.appendChild(tag);
+        });
+    }
 }
 
-// ── Macro detail (NEW) ────────────────────────────────────────────────────────
+
+// ── Macro detail ──────────────────────────────────────────────────────────────
 function renderMacroDetail(fa) {
     var card = document.getElementById("macroCard");
     if (!card) return;
@@ -386,7 +423,7 @@ function renderMacroDetail(fa) {
     }
     card.style.display = "block";
 
-    var streamsEl = document.getElementById("macroStreams");
+    var streamsEl  = document.getElementById("macroStreams");
     var keywordsEl = document.getElementById("macroKeywords");
 
     if (streamsEl) {
@@ -395,6 +432,7 @@ function renderMacroDetail(fa) {
             ? streams.join(", ")
             : "vbaProject.bin";
     }
+
     if (keywordsEl) {
         keywordsEl.innerHTML = "";
         var kws = ma.macro_keywords || [];
@@ -411,33 +449,46 @@ function renderMacroDetail(fa) {
     }
 }
 
-// ── Format-specific deep findings ─────────────────────────────────────────────
-// FIX: reads from fa.html_analysis.html_findings etc. (top-level in fa)
+
+// ── Deep findings (HTML/PDF/Macro/ZIP) ───────────────────────────────────────
 function renderDeepFindings(fa) {
     var allFindings = [];
 
-    (fa.html_analysis   || {}).html_findings   && (fa.html_analysis.html_findings   || []).forEach(function (f) {
-        allFindings.push({ icon: "🌐", text: f, sev: "danger" });
-    });
-    (fa.pdf_analysis    || {}).pdf_findings    && (fa.pdf_analysis.pdf_findings     || []).forEach(function (f) {
-        allFindings.push({ icon: "📄", text: f, sev: "warn" });
-    });
-    (fa.macro_analysis  || {}).macro_findings  && (fa.macro_analysis.macro_findings || []).forEach(function (f) {
-        allFindings.push({ icon: "📝", text: f, sev: "danger" });
-    });
-    (fa.zip_analysis    || {}).zip_findings    && (fa.zip_analysis.zip_findings     || []).forEach(function (f) {
-        allFindings.push({ icon: "🗜", text: f, sev: "warn" });
-    });
-    (fa.script_analysis || {}).script_findings && (fa.script_analysis.script_findings || []).forEach(function (f) {
-        allFindings.push({ icon: "⚡", text: f, sev: "warn" });
-    });
-    (fa.exe_analysis    || {}).exe_findings    && (fa.exe_analysis.exe_findings     || []).forEach(function (f) {
-        allFindings.push({ icon: "🔩", text: f, sev: "warn" });
-    });
+    if ((fa.html_analysis   || {}).html_findings)   {
+        (fa.html_analysis.html_findings   || []).forEach(function (f) {
+            allFindings.push({ icon: "🌐", text: f, sev: "danger" });
+        });
+    }
+    if ((fa.pdf_analysis    || {}).pdf_findings)    {
+        (fa.pdf_analysis.pdf_findings     || []).forEach(function (f) {
+            allFindings.push({ icon: "📄", text: f, sev: "warn" });
+        });
+    }
+    if ((fa.macro_analysis  || {}).macro_findings)  {
+        (fa.macro_analysis.macro_findings || []).forEach(function (f) {
+            allFindings.push({ icon: "📝", text: f, sev: "danger" });
+        });
+    }
+    if ((fa.zip_analysis    || {}).zip_findings)    {
+        (fa.zip_analysis.zip_findings     || []).forEach(function (f) {
+            allFindings.push({ icon: "🗜", text: f, sev: "warn" });
+        });
+    }
+    if ((fa.script_analysis || {}).script_findings) {
+        (fa.script_analysis.script_findings || []).forEach(function (f) {
+            allFindings.push({ icon: "⚡", text: f, sev: "warn" });
+        });
+    }
+    if ((fa.exe_analysis    || {}).exe_findings)    {
+        (fa.exe_analysis.exe_findings     || []).forEach(function (f) {
+            allFindings.push({ icon: "🔩", text: f, sev: "warn" });
+        });
+    }
 
     var card = document.getElementById("deepCard");
-    var list = document.getElementById("deepFindings");
-    list.innerHTML = "";
+    var listEl = document.getElementById("deepFindings");
+    if (!card || !listEl) return;
+    listEl.innerHTML = "";
 
     if (allFindings.length === 0) {
         card.style.display = "none";
@@ -448,11 +499,12 @@ function renderDeepFindings(fa) {
         var row = document.createElement("div");
         row.className   = "att-finding-row att-finding-" + item.sev;
         row.textContent = item.icon + " " + item.text;
-        list.appendChild(row);
+        listEl.appendChild(row);
     });
 }
 
-// ── Archive contents (NEW) ────────────────────────────────────────────────────
+
+// ── Archive contents ──────────────────────────────────────────────────────────
 function renderArchiveContents(fa) {
     var card = document.getElementById("archiveCard");
     if (!card) return;
@@ -473,9 +525,9 @@ function renderArchiveContents(fa) {
     tbody.innerHTML = "";
 
     fileList.slice(0, 30).forEach(function (entry) {
-        var name    = typeof entry === "string" ? entry : (entry.name || "");
-        var isSus   = typeof entry === "object"  ? entry.suspicious : false;
-        var tr      = document.createElement("tr");
+        var name  = typeof entry === "string" ? entry : (entry.name || "");
+        var isSus = typeof entry === "object"  ? entry.suspicious : false;
+        var tr    = document.createElement("tr");
         if (isSus) tr.className = "row-suspicious";
         tr.innerHTML =
             "<td><code>" + escapeHtml(name) + "</code>" +
@@ -485,7 +537,8 @@ function renderArchiveContents(fa) {
     });
 }
 
-// ── Embedded URLs (NEW) ───────────────────────────────────────────────────────
+
+// ── Embedded URLs ─────────────────────────────────────────────────────────────
 function renderEmbeddedUrls(fa) {
     var card = document.getElementById("embeddedUrlsCard");
     var list = document.getElementById("embeddedUrlList");
@@ -504,25 +557,244 @@ function renderEmbeddedUrls(fa) {
     if (countEl) countEl.textContent = urls.length;
 
     urls.forEach(function (url) {
-        var li  = document.createElement("li");
+        var li = document.createElement("li");
         li.className = "att-url-item";
         li.textContent = url;
         list.appendChild(li);
     });
 }
 
-// ── PDF embedded URLs (kept for backward compat, now uses embedded_urls) ──────
-function renderPdfUrls(fa) {
-    // pdf_analysis.embedded_urls is already merged into fa.embedded_urls
-    // This function is kept but does nothing to avoid double-rendering
-}
 
 // ── Explanation ───────────────────────────────────────────────────────────────
-function renderExplanation(data, fa) {
-    document.getElementById("explanationText").textContent =
-        data.explanation || "Analysis complete.";
+// ─────────────────────────────────────────────────────────────────────────────
+// renderExplanation — upgraded to render the structured explanation dict
+// returned by _build_file_explanation() in scan_router.py.
+//
+// The backend now returns data.explanation as a dict with sections:
+//   verdict, risk_score, action, summary, file_info,
+//   static_analysis, yara_analysis, entropy_analysis,
+//   pdf_analysis (PDF only), risk_flags, verdict_reasons
+//
+// Falls back gracefully to plain-text if explanation is still a string
+// (for backward compatibility with other scan types).
+// ─────────────────────────────────────────────────────────────────────────────
 
-    var emailId = fa.email_id;
+function renderExplanation(data, fa) {
+    var container = document.getElementById("explanationText");
+    if (!container) return;
+
+    var exp = data.explanation;
+
+    // ── Fallback: plain string (non-file scans or old responses) ─────────────
+    if (!exp || typeof exp === "string") {
+        container.innerHTML =
+            '<p class="att-exp-summary">' +
+            _escHtml(exp || "Analysis complete.") +
+            "</p>";
+        _renderEmailLink(fa);
+        return;
+    }
+
+    // ── Rich structured explanation (file scans) ──────────────────────────────
+    var verdict   = (exp.verdict     || "CLEAN").toUpperCase();
+    var score     = exp.risk_score   || 0;
+    var action    = (exp.action      || "ALLOW").toUpperCase();
+    var summary   = exp.summary      || "";
+    var fileInfo  = exp.file_info    || {};
+    var staticA   = exp.static_analysis  || {};
+    var yaraA     = exp.yara_analysis    || {};
+    var entropyA  = exp.entropy_analysis || {};
+    var pdfA      = exp.pdf_analysis     || null;
+    var reasons   = exp.verdict_reasons  || [];
+
+    var verdictColour = { CLEAN: "#22c55e", SUSPICIOUS: "#f59e0b", MALICIOUS: "#ef4444" };
+    var actionColour  = { ALLOW: "#22c55e", WARN: "#f59e0b", QUARANTINE: "#ef4444" };
+    var vColour = verdictColour[verdict] || "#94a3b8";
+    var aColour = actionColour[action]   || "#94a3b8";
+
+    var html = "";
+
+    // ── 1. Header bar ─────────────────────────────────────────────────────────
+    html += '<div class="att-exp-header" style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">';
+    html +=   '<span class="att-exp-verdict" style="font-size:1.05rem;font-weight:700;color:' + vColour + ';">' + verdict + '</span>';
+    html +=   '<span class="att-exp-score" style="color:#94a3b8;font-size:0.85rem;">Risk Score: <strong style="color:#e2e8f0;">' + score.toFixed(1) + ' / 100</strong></span>';
+    html +=   '<span class="att-exp-action" style="margin-left:auto;padding:2px 10px;border-radius:4px;font-size:0.78rem;font-weight:600;background:' + aColour + '22;color:' + aColour + ';border:1px solid ' + aColour + '44;">' + action + '</span>';
+    html += '</div>';
+
+    // ── 2. Summary paragraph ──────────────────────────────────────────────────
+    if (summary) {
+        html += '<p class="att-exp-summary" style="color:#cbd5e1;font-size:0.88rem;line-height:1.6;margin-bottom:14px;">' + _escHtml(summary) + '</p>';
+    }
+
+    // ── 3. File info pill row ─────────────────────────────────────────────────
+    if (fileInfo.filename) {
+        html += '<div class="att-exp-pills" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">';
+        html += _pill("📄 " + fileInfo.filename, "#334155");
+        html += _pill("Type: " + (fileInfo.type || "?"), "#334155");
+        html += _pill("Size: " + (fileInfo.size_kb || 0) + " KB", "#334155");
+        if (fileInfo.type_mismatch) {
+            html += _pill("⚠ Type mismatch", "#7f1d1d", "#fca5a5");
+        }
+        html += '</div>';
+    }
+
+    // ── 4. Verdict reasons ────────────────────────────────────────────────────
+    if (reasons.length > 0) {
+        html += _expSection(
+            "🔍 Why This Verdict",
+            "#1e293b",
+            vColour + "33",
+            vColour + "66",
+            '<ul class="att-exp-list">' +
+            reasons.map(function(r) {
+                return '<li style="color:#cbd5e1;font-size:0.85rem;margin-bottom:4px;">' + _escHtml(r) + '</li>';
+            }).join("") +
+            '</ul>'
+        );
+    }
+
+    // ── 5. Static string analysis ─────────────────────────────────────────────
+    var strHits    = staticA.hits    || [];
+    var strCount   = staticA.hit_count || 0;
+    var strColour  = strCount > 0 ? "#f59e0b" : "#22c55e";
+    var strIcon    = strCount > 0 ? "⚡" : "✅";
+    var strBody    = '<p style="color:#94a3b8;font-size:0.82rem;margin-bottom:8px;">' +
+                    '<em>Method: ' + _escHtml(staticA.method || "") + '</em></p>' +
+                    '<p style="color:#cbd5e1;font-size:0.85rem;margin-bottom:' + (strHits.length ? "10px" : "0") + ';">' +
+                    _escHtml(staticA.explanation || "") + '</p>';
+
+    if (strHits.length > 0) {
+        strBody += '<div style="display:flex;flex-wrap:wrap;gap:5px;">';
+        strHits.forEach(function(hit) {
+            var label = typeof hit === "string" ? hit : (hit.string || JSON.stringify(hit));
+            var count = typeof hit === "object" && hit.count ? " ×" + hit.count : "";
+            strBody += _pill(label + count, "#422006", "#fbbf24");
+        });
+        strBody += '</div>';
+    }
+
+    html += _expSection(strIcon + " Static String Analysis (" + strCount + " hit" + (strCount !== 1 ? "s" : "") + ")",
+        "#0f172a", strColour + "22", strColour + "55", strBody);
+
+    // ── 6. YARA analysis ──────────────────────────────────────────────────────
+    var yaraHits   = yaraA.hits    || [];
+    var yaraCount  = yaraA.hit_count || 0;
+    var yaraColour = yaraCount > 0 ? "#ef4444" : "#22c55e";
+    var yaraIcon   = yaraCount > 0 ? "🚨" : "✅";
+    var sevColour  = { CRITICAL: "#ef4444", HIGH: "#f97316", MEDIUM: "#f59e0b", LOW: "#94a3b8" };
+
+    var yaraBody = '<p style="color:#94a3b8;font-size:0.82rem;margin-bottom:8px;"><em>Method: ' +
+                  _escHtml(yaraA.method || "") + '</em></p>' +
+                  '<p style="color:#cbd5e1;font-size:0.85rem;margin-bottom:' + (yaraHits.length ? "10px" : "0") + ';">' +
+                  _escHtml(yaraA.explanation || "") + '</p>';
+
+    if (yaraHits.length > 0) {
+        yaraBody += '<div style="display:flex;flex-direction:column;gap:5px;">';
+        yaraHits.forEach(function(m) {
+            var sc = sevColour[m.severity] || "#94a3b8";
+            yaraBody += '<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:#1e293b;border-left:3px solid ' + sc + ';border-radius:3px;">';
+            yaraBody += '<span style="font-family:monospace;font-size:0.82rem;color:#e2e8f0;">' + _escHtml(m.rule) + '</span>';
+            yaraBody += '<span style="margin-left:auto;font-size:0.75rem;font-weight:600;color:' + sc + ';">' + m.severity + '</span>';
+            if (m.namespace) {
+                yaraBody += '<span style="font-size:0.72rem;color:#64748b;">' + _escHtml(m.namespace) + '</span>';
+            }
+            yaraBody += '</div>';
+        });
+        yaraBody += '</div>';
+    }
+
+    html += _expSection(yaraIcon + " YARA Signature Matching (" + yaraCount + " match" + (yaraCount !== 1 ? "es" : "") + ")",
+        "#0f172a", yaraColour + "22", yaraColour + "55", yaraBody);
+
+    // ── 7. PDF analysis (only for PDFs) ───────────────────────────────────────
+    if (pdfA) {
+        var pdfFlags  = pdfA.flags    || [];
+        var pdfColour = pdfFlags.length > 0 ? "#f97316" : "#22c55e";
+        var pdfIcon   = pdfFlags.length > 0 ? "📑" : "✅";
+        var pdfUrls   = pdfA.urls_found || 0;
+
+        var pdfBody = '<p style="color:#cbd5e1;font-size:0.85rem;margin-bottom:' + (pdfFlags.length ? "10px" : "0") + ';">' +
+                      _escHtml(pdfA.explanation || "") + '</p>';
+
+        if (pdfFlags.length > 0) {
+            pdfBody += '<ul class="att-exp-list">';
+            pdfFlags.forEach(function(f) {
+                pdfBody += '<li style="color:#fed7aa;font-size:0.84rem;margin-bottom:4px;">⚠ ' + _escHtml(f) + '</li>';
+            });
+            pdfBody += '</ul>';
+        }
+        if (pdfUrls > 0) {
+            pdfBody += '<p style="color:#94a3b8;font-size:0.82rem;margin-top:6px;">🔗 ' + pdfUrls + ' embedded URL(s) extracted.</p>';
+        }
+
+        html += _expSection(pdfIcon + " PDF Structure Analysis",
+            "#0f172a", pdfColour + "22", pdfColour + "55", pdfBody);
+    }
+
+    // ── 8. Entropy analysis ───────────────────────────────────────────────────
+    var eVal     = entropyA.value     || 0;
+    var eColour  = { green: "#22c55e", amber: "#f59e0b", red: "#ef4444" }[entropyA.colour] || "#94a3b8";
+    var ePct     = entropyA.bar_pct   || 0;
+    var eInterp  = entropyA.interpretation || "";
+    var eIcon    = entropyA.colour === "red" ? "🔴" : entropyA.colour === "amber" ? "🟡" : "🟢";
+
+    var eBody  = '<div style="margin-bottom:8px;">';
+    eBody     += '  <div style="display:flex;justify-content:space-between;margin-bottom:4px;">';
+    eBody     += '    <span style="font-size:0.82rem;color:#94a3b8;">Shannon Entropy</span>';
+    eBody     += '    <span style="font-size:0.88rem;font-weight:600;color:' + eColour + ';">' + eVal.toFixed(4) + ' / 8.0</span>';
+    eBody     += '  </div>';
+    eBody     += '  <div style="background:#1e293b;border-radius:4px;height:6px;overflow:hidden;">';
+    eBody     += '    <div style="width:' + ePct + '%;height:100%;background:' + eColour + ';transition:width 0.4s;"></div>';
+    eBody     += '  </div>';
+    eBody     += '</div>';
+    eBody     += '<p style="color:#cbd5e1;font-size:0.85rem;">' + _escHtml(eInterp) + '</p>';
+
+    html += _expSection(eIcon + " Shannon Entropy Analysis",
+        "#0f172a", eColour + "22", eColour + "55", eBody);
+
+    // ── Render ────────────────────────────────────────────────────────────────
+    container.innerHTML = html;
+    _renderEmailLink(fa);
+}
+
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function _expSection(title, bg, borderBg, borderColour, bodyHtml) {
+    return (
+        '<div style="background:' + bg + ';border:1px solid ' + borderColour +
+        ';border-radius:6px;padding:12px 14px;margin-bottom:10px;">' +
+        '<div style="font-size:0.86rem;font-weight:600;color:#e2e8f0;margin-bottom:8px;">' +
+        _escHtml(title) +
+        '</div>' +
+        bodyHtml +
+        '</div>'
+    );
+}
+
+function _pill(text, bg, colour) {
+    bg     = bg     || "#1e293b";
+    colour = colour || "#94a3b8";
+    return (
+        '<span style="display:inline-block;padding:2px 8px;border-radius:99px;' +
+        'font-size:0.75rem;background:' + bg + ';color:' + colour + ';border:1px solid ' + colour + '33;">' +
+        _escHtml(text) +
+        '</span>'
+    );
+}
+
+function _escHtml(str) {
+    if (!str) return "";
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function _renderEmailLink(fa) {
+    var emailId = fa ? fa.email_id : null;
     var linkRow = document.getElementById("emailLinkRow");
     var linkEl  = document.getElementById("emailScanLink");
     if (linkRow && linkEl) {
@@ -535,7 +807,6 @@ function renderExplanation(data, fa) {
         }
     }
 }
-
 
 // ════════════════════════════════════════════════════════════════════════════
 // COPY BUTTONS
@@ -568,14 +839,13 @@ document.addEventListener("click", function (e) {
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// HISTORY  (FIX: Flask route now returns {status, scans, total})
+// HISTORY POLLING
 // ════════════════════════════════════════════════════════════════════════════
 
 function loadHistory() {
     fetch(HISTORY_URL + "?limit=20")
         .then(function (r) { return r.json(); })
         .then(function (data) {
-            // FIX: was data.status !== "success" which failed on raw list
             if (data.status !== "success") return;
             renderHistory(data.scans || []);
         })
@@ -593,9 +863,9 @@ function renderHistory(scans) {
     scans.forEach(function (s) {
         var verdict      = (s.verdict || "UNKNOWN").toUpperCase();
         var verdictClass = {
-            CLEAN:     "badge-safe",
-            SUSPICIOUS:"badge-suspicious",
-            MALICIOUS: "badge-malicious",
+            CLEAN:      "badge-safe",
+            SUSPICIOUS: "badge-suspicious",
+            MALICIOUS:  "badge-malicious",
         }[verdict] || "badge-safe";
 
         var ts      = s.scanned_at
@@ -612,12 +882,10 @@ function renderHistory(scans) {
             "<td>" + formatBytes(s.file_size || 0) + "</td>" +
             "<td class='" + entropyClass(entropy) + "'>" +
                 entropy.toFixed(2) +
-                "<div class='att-entropy-mini'>" +
-                    "<div class='att-entropy-mini-fill " + entropyFillClass(entropy) + "' " +
-                    "style='width:" + Math.min((entropy / 8) * 100, 100).toFixed(0) + "%'></div>" +
-                "</div>" +
             "</td>" +
-            "<td>" + yCount + "</td>" +
+            "<td class='" + (yCount > 0 ? "att-cell-red" : "") + "'>" +
+                yCount +
+            "</td>" +
             "<td><span class='badge " + verdictClass + "'>" + verdict + "</span></td>" +
             "<td class='att-ts'>" + ts + "</td>";
         historyBody.appendChild(tr);
@@ -629,12 +897,6 @@ function entropyClass(e) {
     if (e > 7.2) return "att-cell-red";
     if (e > 6.0) return "att-cell-amber";
     return "";
-}
-
-function entropyFillClass(e) {
-    if (e > 7.2) return "att-entropy-red";
-    if (e > 6.0) return "att-entropy-amber";
-    return "att-entropy-green";
 }
 
 

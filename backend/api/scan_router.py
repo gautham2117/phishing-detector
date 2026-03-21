@@ -21,6 +21,14 @@
 #        GET  /risk/status         → probe_module_status()
 #        POST /risk/aggregate/auto → aggregate_risk_scores_auto()
 #      Both were implemented in risk_aggregator.py but never wired to a route.
+#
+# EXPLANATION UPGRADE (latest):
+#   8. _build_file_explanation() — new function replacing the one-liner in
+#      scan_file(). Returns a structured dict with sections:
+#        verdict_banner, risk_score, summary, static_analysis,
+#        yara_analysis, pdf_analysis, entropy_analysis, recommended_action
+#      The JS renderExplanation() reads this dict and renders a detailed
+#      card-based breakdown instead of a single plain-text sentence.
 
 import io as _io
 import json
@@ -51,7 +59,7 @@ from backend.modules.platform_monitor   import (
     get_due_targets, get_unified_feed
 )
 from backend.modules.risk_engine        import aggregate_risk_scores
-from backend.modules.risk_engine    import (   # FIX 7 — was missing entirely
+from backend.modules.risk_engine    import (
     aggregate_risk_scores_auto,
     probe_module_status,
 )
@@ -163,7 +171,7 @@ class AggregateRequest(PydanticBase):
     weights:         Optional[dict] = None
 
 
-class AutoAggregateRequest(PydanticBase):           # FIX 7 — new model
+class AutoAggregateRequest(PydanticBase):
     """
     Optional body for POST /risk/aggregate/auto.
     All fields optional — omit body entirely for default weights.
@@ -241,7 +249,7 @@ def _risk_level_to_label(risk_level: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIX 1 — URL result score/label extractor
+# URL result score/label extractor
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_url_risk(result: dict) -> tuple:
@@ -714,7 +722,7 @@ async def scan_ml_url_batch(urls: List[str]):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 6 — File / Attachment analysis
+# Phase 6 — File / Attachment analysis  ← UPGRADED explanation
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post("/scan/file", summary="Analyse uploaded file",
@@ -742,12 +750,8 @@ async def scan_file(
         label  = label_map.get(verdict, "SUSPICIOUS")
         action = _label_to_action(label)
 
-        reasons     = result.get("verdict_reasons", [])
-        explanation = (
-            f"File '{filename}' flagged: {'; '.join(reasons[:3])}."
-            if reasons
-            else f"File '{filename}' passed all checks."
-        )
+        # ── NEW: rich structured explanation instead of one-liner ──────────
+        explanation = _build_file_explanation(result, filename, score, verdict, action)
 
         db_id = _save_attachment_scan(result, filename, email_scan_id)
         result["email_scan_id"] = email_scan_id
@@ -765,7 +769,7 @@ async def scan_file(
             risk_score=score,
             label=label,
             module_results={"file_analysis": result},
-            explanation=explanation,
+            explanation=explanation,          # now a structured dict
             recommended_action=action,
         ) | {"scan_id": db_id}
 
@@ -777,6 +781,263 @@ async def scan_file(
             status_code=500,
             content=error_response(f"File analysis failed: {str(e)[:200]}")
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW: Structured file explanation builder  ← replaces old one-liner
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_file_explanation(
+    result:   dict,
+    filename: str,
+    score:    float,
+    verdict:  str,
+    action:   str,
+) -> dict:
+    """
+    Build a rich structured explanation dict for the file analysis.
+    The JS renderExplanation() reads each section and renders it as
+    labelled cards with icons, colours, and bullet lists.
+
+    Returned shape:
+    {
+      "verdict":          str,        "CLEAN" | "SUSPICIOUS" | "MALICIOUS"
+      "risk_score":       float,      0-100
+      "action":           str,        "ALLOW" | "WARN" | "QUARANTINE"
+      "summary":          str,        one paragraph overview
+      "file_info": {
+        "filename":       str,
+        "type":           str,
+        "size_kb":        float,
+        "category":       str,
+        "type_mismatch":  bool,
+      },
+      "static_analysis": {
+        "label":          str,        section heading
+        "method":         str,        how strings were found
+        "hits":           list[str],  each suspicious string found
+        "hit_count":      int,
+        "explanation":    str,        plain-English description
+      },
+      "yara_analysis": {
+        "label":          str,
+        "method":         str,
+        "hits":           list[dict], [{rule, severity, namespace}]
+        "hit_count":      int,
+        "explanation":    str,
+      },
+      "pdf_analysis": {               only present if file_type == "pdf"
+        "label":          str,
+        "flags":          list[str],
+        "urls_found":     int,
+        "explanation":    str,
+      },
+      "entropy_analysis": {
+        "label":          str,
+        "value":          float,
+        "interpretation": str,
+        "bar_pct":        int,        0-100 for progress bar width
+        "colour":         str,        "green" | "amber" | "red"
+      },
+      "risk_flags": list[str],        raw flag names from _compute_verdict
+      "verdict_reasons": list[str],   human-readable verdict reasons
+    }
+    """
+
+    file_type  = result.get("file_type",     "unknown")
+    file_size  = result.get("file_size",     0)
+    category   = result.get("file_category", "unknown")
+    entropy    = result.get("entropy",       0.0)
+    is_packed  = result.get("is_packed",     False)
+    mismatch   = result.get("type_mismatch", False)
+
+    yara_hits   = result.get("yara_matches",      [])
+    str_hits    = result.get("suspicious_strings", [])
+    pdf_data    = result.get("pdf_analysis",       {})
+    risk_flags  = result.get("risk_flags",         [])
+    reasons     = result.get("verdict_reasons",    [])
+
+    # ── Summary paragraph ────────────────────────────────────────────────────
+    verdict_words = {
+        "CLEAN":      "no malicious indicators were found",
+        "SUSPICIOUS": "several suspicious indicators were detected",
+        "MALICIOUS":  "strong malicious indicators were found",
+    }
+    summary = (
+        f"PhishGuard completed a multi-layer static analysis of "
+        f"\"{filename}\" ({file_type.upper()}, "
+        f"{round(file_size / 1024, 1)} KB). "
+        f"The risk score is {score:.1f}/100 — {verdict_words.get(verdict, 'analysis complete')}. "
+        f"Recommended action: {action}."
+    )
+    if mismatch:
+        summary += (
+            " WARNING: The file extension does not match its magic bytes — "
+            "this file may be disguised as a different type."
+        )
+
+    # ── File info block ───────────────────────────────────────────────────────
+    file_info = {
+        "filename":      filename,
+        "type":          file_type.upper(),
+        "size_kb":       round(file_size / 1024, 2),
+        "category":      category,
+        "type_mismatch": mismatch,
+    }
+
+    # ── Static string analysis ────────────────────────────────────────────────
+    if str_hits:
+        str_explanation = (
+            f"{len(str_hits)} suspicious string pattern(s) were found by scanning "
+            f"the raw file bytes (and decompressed PDF streams where applicable). "
+            f"These patterns are commonly associated with malware, exploit payloads, "
+            f"or command-and-control activity. Each match is shown below with its "
+            f"occurrence count."
+        )
+    else:
+        str_explanation = (
+            "No suspicious string patterns were detected. The file's byte content "
+            "was scanned against a library of known-malicious patterns including "
+            "shell commands, obfuscation techniques, and persistence mechanisms."
+        )
+
+    static_analysis = {
+        "label":       "Static String Analysis",
+        "method":      "Byte-pattern scan against known-malicious string library "
+                       "(with PDF FlateDecode decompression)",
+        "hits":        str_hits,
+        "hit_count":   len(str_hits),
+        "explanation": str_explanation,
+    }
+
+    # ── YARA analysis ─────────────────────────────────────────────────────────
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+    yara_sorted = sorted(
+        yara_hits,
+        key=lambda m: severity_order.get(
+            (m.get("severity") or "MEDIUM").upper(), 2
+        )
+    )
+
+    if yara_hits:
+        top_sev = (yara_sorted[0].get("severity") or "MEDIUM").upper()
+        yara_explanation = (
+            f"{len(yara_hits)} YARA signature(s) matched this file. "
+            f"YARA is a pattern-matching engine used in malware research — each rule "
+            f"describes a specific threat family or technique using byte sequences, "
+            f"strings, and logical conditions. The highest severity match is "
+            f"{top_sev}. Matched rules are listed below."
+        )
+    else:
+        yara_explanation = (
+            "No YARA rules matched. The file was scanned against all compiled "
+            "signature sets. A clean YARA result means no known malware family "
+            "or technique signature was detected in the file's byte content."
+        )
+
+    yara_analysis = {
+        "label":       "YARA Signature Matching",
+        "method":      "Compiled YARA ruleset scan (FlateDecode-aware for PDF)",
+        "hits":        [
+            {
+                "rule":      m.get("rule",      "unknown"),
+                "severity":  (m.get("severity") or "MEDIUM").upper(),
+                "namespace": m.get("namespace", ""),
+                "tags":      m.get("tags",      []),
+            }
+            for m in yara_sorted
+        ],
+        "hit_count":   len(yara_hits),
+        "explanation": yara_explanation,
+    }
+
+    # ── PDF-specific analysis ─────────────────────────────────────────────────
+    pdf_analysis_out = None
+    if file_type == "pdf" and pdf_data:
+        pdf_flags = []
+        if pdf_data.get("has_javascript"):
+            pdf_flags.append("Embedded JavaScript (/JS or /JavaScript action)")
+        if pdf_data.get("has_openaction"):
+            pdf_flags.append("OpenAction trigger — runs automatically on open")
+        if pdf_data.get("has_launch"):
+            pdf_flags.append("Launch action — can execute external programs")
+        if pdf_data.get("has_embedded_file"):
+            pdf_flags.append("Embedded file attachment inside PDF structure")
+
+        url_count = len(pdf_data.get("embedded_urls", []))
+
+        if pdf_flags:
+            pdf_exp = (
+                f"PDF structure analysis found {len(pdf_flags)} dangerous action(s). "
+                f"These are PDF-specific features that legitimate documents rarely use "
+                f"but are commonly exploited to trigger code execution when the file "
+                f"is opened in a PDF reader."
+            )
+        else:
+            pdf_exp = (
+                "No dangerous PDF actions detected. The document structure was "
+                "inspected for embedded JavaScript, auto-run triggers, launch "
+                "actions, and embedded file attachments — none were found."
+            )
+        if url_count:
+            pdf_exp += f" {url_count} embedded URL(s) were extracted for reference."
+
+        pdf_analysis_out = {
+            "label":       "PDF Structure Analysis",
+            "flags":       pdf_flags,
+            "urls_found":  url_count,
+            "explanation": pdf_exp,
+        }
+
+    # ── Entropy analysis ──────────────────────────────────────────────────────
+    if entropy >= 7.2:
+        entropy_interp  = (
+            "Very high entropy ({:.4f}/8.0) — the file is likely packed, "
+            "encrypted, or compressed. Malware commonly uses packers like UPX "
+            "to evade detection. Legitimate files rarely exceed 7.2 bits/byte."
+        ).format(entropy)
+        entropy_colour  = "red"
+    elif entropy >= 6.5:
+        entropy_interp  = (
+            "Moderately elevated entropy ({:.4f}/8.0) — the file contains "
+            "sections with high information density. This is common in "
+            "compressed assets but can also indicate obfuscated payloads."
+        ).format(entropy)
+        entropy_colour  = "amber"
+    else:
+        entropy_interp  = (
+            "Normal entropy ({:.4f}/8.0) — byte distribution is consistent "
+            "with a standard {} file. No signs of packing or encryption "
+            "based on entropy alone."
+        ).format(entropy, file_type.upper())
+        entropy_colour  = "green"
+
+    entropy_analysis = {
+        "label":          "Shannon Entropy Analysis",
+        "value":          entropy,
+        "interpretation": entropy_interp,
+        "bar_pct":        min(int((entropy / 8.0) * 100), 100),
+        "colour":         entropy_colour,
+    }
+
+    # ── Assemble final dict ───────────────────────────────────────────────────
+    out = {
+        "verdict":          verdict,
+        "risk_score":       score,
+        "action":           action,
+        "summary":          summary,
+        "file_info":        file_info,
+        "static_analysis":  static_analysis,
+        "yara_analysis":    yara_analysis,
+        "entropy_analysis": entropy_analysis,
+        "risk_flags":       risk_flags,
+        "verdict_reasons":  reasons,
+    }
+
+    if pdf_analysis_out:
+        out["pdf_analysis"] = pdf_analysis_out
+
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1244,26 +1505,17 @@ async def aggregate_risk(req: AggregateRequest):
         return JSONResponse(status_code=500, content=error_response(str(e)))
 
 
-@router.post(                                              # FIX 7 — new route
+@router.post(
     "/risk/aggregate/auto",
     summary="Aggregate risk scores — auto (most recent scan per module)",
     tags=["Risk Score Aggregator"],
 )
 async def aggregate_risk_auto(req: AutoAggregateRequest):
-    """
-    Automatic mode — no scan IDs required.
-    Pulls the most recent record from every module table that has data.
-    Modules with no records are excluded from the weighted calculation.
-
-    Optional body: {"weights": {"email": 0.20, "url": 0.30, ...}}
-    Weights are normalised internally — partial overrides are safe.
-    """
     try:
         with _flask_ctx():
             result = aggregate_risk_scores_auto(weights=req.weights)
 
         if result.get("error"):
-            # Means no module has any scan records yet
             return JSONResponse(
                 status_code=422,
                 content=error_response(result["error"]),
@@ -1276,8 +1528,6 @@ async def aggregate_risk_auto(req: AutoAggregateRequest):
             "MALICIOUS":  "MALICIOUS",
         }.get(verdict, "SUSPICIOUS")
 
-        # Build synthetic request from breakdown scan_ids so
-        # _save_aggregated_score can store the correct foreign keys
         bd = result.get("breakdown", {})
 
         class _AutoReq:
@@ -1312,24 +1562,12 @@ async def aggregate_risk_auto(req: AutoAggregateRequest):
         )
 
 
-@router.get(                                               # FIX 7 — new route
+@router.get(
     "/risk/status",
     summary="Module status probe — online/offline + latest scan per module",
     tags=["Risk Score Aggregator"],
 )
 async def risk_status():
-    """
-    Returns online/offline status and latest scan metadata for all six modules.
-    Consumed by the auto-mode status grid before aggregation so the UI can
-    show which modules have data and what their most recent score was.
-
-    Response shape per module key:
-        online     : bool
-        scan_id    : int | None
-        score      : float | None  (0-100)
-        ref        : str           (sender / domain / filename)
-        scanned_at : str           (ISO 8601 UTC)
-    """
     try:
         with _flask_ctx():
             status = probe_module_status()

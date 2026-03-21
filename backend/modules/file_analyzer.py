@@ -31,11 +31,20 @@
 #      stream names are surfaced in macro_analysis.
 #  10. Archive content table — ZIP/DOCX now returns structured file_list
 #      with name, size, is_suspicious columns.
+#
+# PDF DECOMPRESSION FIX (latest):
+#  11. _extract_pdf_raw_text() — decompresses all FlateDecode (zlib) streams
+#      before string scanning and YARA scanning. Without this, ReportLab and
+#      most real-world PDFs store content as compressed binary, so patterns
+#      like "powershell" or "cmd.exe" are invisible to raw-byte scanners.
+#      _run_yara_scan() and _extract_suspicious_strings() both now accept a
+#      file_type argument and automatically decompress PDF streams first.
 
 import os
 import re
 import math
 import json
+import zlib
 import hashlib
 import logging
 import zipfile
@@ -113,6 +122,10 @@ SUSPICIOUS_STRINGS = [
     b'HKEY_CURRENT_USER', b'reg add', b'net user',
     b'bypass', b'ExecutionPolicy', b'EncodedCommand',
     b'FromBase64String', b'invoke-expression', b'IEX(',
+    # Extra patterns useful for PDF payloads
+    b'mshta', b'certutil', b'regsvr32',
+    b'CreateRemoteThread', b'VirtualAllocEx', b'WriteProcessMemory',
+    b'ADODB.Stream', b'unescape', b'launchURL',
 ]
 
 EXTENSION_MAP = {
@@ -172,6 +185,39 @@ def _get_yara_rules():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PDF stream decompressor  ← NEW (Fix #11)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_pdf_raw_text(data: bytes) -> bytes:
+    """
+    Decompress all FlateDecode (zlib) content streams inside a PDF so that
+    string scanners and YARA rules can find plaintext patterns that were
+    compressed by the PDF writer (e.g. ReportLab always uses zlib by default).
+
+    Strategy:
+      1. Find every stream...endstream blob in the raw PDF bytes.
+      2. Try zlib.decompress() on each blob.
+      3. Concatenate all successfully decompressed payloads.
+      4. Return original bytes + decompressed bytes so uncompressed objects
+         (metadata, cross-reference table, raw string literals) are also covered.
+
+    This is the same approach used by pdfid, peepdf, and pdf-parser.
+    """
+    stream_re = re.compile(rb'stream\r?\n(.*?)\r?\nendstream', re.DOTALL)
+    extra = bytearray()
+
+    for m in stream_re.finditer(data):
+        blob = m.group(1)
+        try:
+            extra += zlib.decompress(blob)
+        except Exception:
+            # Not a zlib stream (could be uncompressed, JPEG, etc.) — keep raw
+            extra += blob
+
+    return bytes(data) + bytes(extra)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -189,7 +235,7 @@ def analyze_file(
         filename, file_type, file_category, file_size
         hashes: {md5, sha1, sha256}
         entropy, is_packed, is_high_entropy
-        type_mismatch: bool          ← NEW: extension vs magic bytes disagree
+        type_mismatch: bool          ← extension vs magic bytes disagree
         yara_matches: list
         static_findings: list        (raw list of finding dicts)
         suspicious_strings: list     ← ALIAS of static_findings for the JS
@@ -199,13 +245,13 @@ def analyze_file(
         zip_analysis:    dict | {}
         script_analysis: dict | {}
         exe_analysis:    dict | {}
-        embedded_urls:   list        ← NEW: aggregated from all type analyses
-        vt_result:       dict | None ← NEW: VirusTotal hash lookup (optional)
-        known_bad:       bool        ← NEW: true if VT detects ≥ 3 engines
+        embedded_urls:   list        ← aggregated from all type analyses
+        vt_result:       dict | None ← VirusTotal hash lookup (optional)
+        known_bad:       bool        ← true if VT detects >= 3 engines
         verdict:         str         "CLEAN" | "SUSPICIOUS" | "MALICIOUS"
-        risk_score:      float       0–100
+        risk_score:      float       0-100
         risk_flags:      list[str]
-        verdict_reasons: list[str]   ← NEW: human-readable explanation lines
+        verdict_reasons: list[str]   ← human-readable explanation lines
         email_id:        int | None
         analyzed_at:     str
     """
@@ -228,11 +274,11 @@ def analyze_file(
     is_packed       = entropy >= ENTROPY_PACKED
     is_high_entropy = entropy >= ENTROPY_SUSPICIOUS
 
-    # Step 4 — YARA
-    yara_matches = _run_yara_scan(file_bytes, filename)
+    # Step 4 — YARA  (pass file_type so PDFs get decompressed first)
+    yara_matches = _run_yara_scan(file_bytes, filename, file_type)
 
-    # Step 5 — Suspicious strings
-    static_findings = _extract_suspicious_strings(file_bytes)
+    # Step 5 — Suspicious strings  (pass file_type so PDFs get decompressed first)
+    static_findings = _extract_suspicious_strings(file_bytes, file_type)
 
     # Step 6 — Type-specific analysis
     pdf_analysis    = {}
@@ -284,40 +330,33 @@ def analyze_file(
     )
 
     return {
-        "filename":         filename,
-        "file_type":        file_type,
-        "file_category":    file_category,
-        "file_size":        len(file_bytes),
-        "hashes":           hashes,
-        "entropy":          round(entropy, 4),
-        "is_packed":        is_packed,
-        "is_high_entropy":  is_high_entropy,
-        # NEW: extension vs magic byte mismatch
-        "type_mismatch":    type_mismatch,
-        "yara_matches":     yara_matches,
-        # Both keys point to the same data — static_findings for Python
-        # callers, suspicious_strings for the JS renderer
-        "static_findings":  static_findings,
+        "filename":           filename,
+        "file_type":          file_type,
+        "file_category":      file_category,
+        "file_size":          len(file_bytes),
+        "hashes":             hashes,
+        "entropy":            round(entropy, 4),
+        "is_packed":          is_packed,
+        "is_high_entropy":    is_high_entropy,
+        "type_mismatch":      type_mismatch,
+        "yara_matches":       yara_matches,
+        "static_findings":    static_findings,
         "suspicious_strings": [f["string"] for f in static_findings],
-        # Type-specific analysis dicts — top-level so JS can read directly
-        "pdf_analysis":     pdf_analysis,
-        "macro_analysis":   macro_analysis,
-        "html_analysis":    html_analysis,
-        "zip_analysis":     zip_analysis,
-        "script_analysis":  script_analysis,
-        "exe_analysis":     exe_analysis,
-        # Aggregated URLs from all analysis types
-        "embedded_urls":    embedded_urls,
-        # VirusTotal
-        "vt_result":        vt_result,
-        "known_bad":        known_bad,
-        # Verdict
-        "verdict":          verdict,       # FIX: now uppercase "CLEAN" etc.
-        "risk_score":       risk_score,
-        "risk_flags":       risk_flags,
-        "verdict_reasons":  verdict_reasons,
-        "email_id":         email_id,
-        "analyzed_at":      datetime.utcnow().isoformat() + "Z"
+        "pdf_analysis":       pdf_analysis,
+        "macro_analysis":     macro_analysis,
+        "html_analysis":      html_analysis,
+        "zip_analysis":       zip_analysis,
+        "script_analysis":    script_analysis,
+        "exe_analysis":       exe_analysis,
+        "embedded_urls":      embedded_urls,
+        "vt_result":          vt_result,
+        "known_bad":          known_bad,
+        "verdict":            verdict,
+        "risk_score":         risk_score,
+        "risk_flags":         risk_flags,
+        "verdict_reasons":    verdict_reasons,
+        "email_id":           email_id,
+        "analyzed_at":        datetime.utcnow().isoformat() + "Z"
     }
 
 
@@ -334,7 +373,7 @@ def _compute_hashes(data: bytes) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 2: File type detection + mismatch check  (NEW: returns 3-tuple)
+# Step 2: File type detection + mismatch check
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _detect_file_type(data: bytes, filename: str) -> tuple:
@@ -363,12 +402,11 @@ def _detect_file_type(data: bytes, filename: str) -> tuple:
 
     if magic_type:
         category      = EXTENSION_MAP.get("." + magic_type, "unknown")
-        # Mismatch: declared extension expects a different magic type
         expected_magic = EXPECTED_MAGIC.get(ext)
         type_mismatch  = bool(
             expected_magic and
             magic_type != expected_magic and
-            magic_type not in ("zip",)  # ZIP covers Office formats
+            magic_type not in ("zip",)
         )
         return magic_type, category, type_mismatch
 
@@ -398,16 +436,29 @@ def _compute_entropy(data: bytes) -> float:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 4: YARA scanning
+# Step 4: YARA scanning  ← FIXED: decompresses PDF streams before scanning
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _run_yara_scan(data: bytes, filename: str) -> list:
+def _run_yara_scan(data: bytes, filename: str, file_type: str = "") -> list:
+    """
+    Scan file bytes with compiled YARA rules.
+
+    For PDF files, content streams are decompressed before scanning so that
+    string patterns inside FlateDecode-compressed streams are visible to YARA.
+    Without this step, patterns like 'powershell' stored in a ReportLab-
+    generated PDF would never match because they exist as zlib-compressed
+    binary, not as readable ASCII bytes.
+    """
     rules = _get_yara_rules()
     if rules is None:
         return []
+
+    # Decompress PDF streams so YARA string patterns can match
+    scan_data = _extract_pdf_raw_text(data) if file_type == "pdf" else data
+
     matches = []
     try:
-        for match in rules.match(data=data):
+        for match in rules.match(data=scan_data):
             matches.append({
                 "rule":      match.rule,
                 "namespace": match.namespace,
@@ -421,19 +472,31 @@ def _run_yara_scan(data: bytes, filename: str) -> list:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 5: Suspicious string extraction
+# Step 5: Suspicious string extraction  ← FIXED: decompresses PDF streams
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _extract_suspicious_strings(data: bytes) -> list:
-    findings   = []
-    data_lower = data.lower()
+def _extract_suspicious_strings(data: bytes, file_type: str = "") -> list:
+    """
+    Search file bytes for known-suspicious byte patterns.
+
+    For PDF files, content streams are decompressed before scanning.
+    ReportLab and most PDF writers compress streams with zlib by default,
+    making all text content invisible to a raw-byte string search.
+    Decompressing first ensures we catch patterns buried inside streams.
+    """
+    # Decompress PDF streams so patterns inside FlateDecode content are visible
+    scan_data  = _extract_pdf_raw_text(data) if file_type == "pdf" else data
+    data_lower = scan_data.lower()
+
+    findings = []
     for pattern in SUSPICIOUS_STRINGS:
-        count = data_lower.count(pattern.lower())
+        pat_lower = pattern.lower()
+        count     = data_lower.count(pat_lower)
         if count > 0:
-            idx     = data_lower.find(pattern.lower())
+            idx     = data_lower.find(pat_lower)
             start   = max(0, idx - 20)
-            end     = min(len(data), idx + len(pattern) + 20)
-            context = data[start:end].decode("utf-8", errors="replace")
+            end     = min(len(scan_data), idx + len(pattern) + 20)
+            context = scan_data[start:end].decode("utf-8", errors="replace")
             context = re.sub(r'[\x00-\x1f\x7f-\xff]', '.', context)
             findings.append({
                 "string":  pattern.decode("utf-8", errors="replace"),
@@ -459,7 +522,8 @@ def _analyze_pdf(data: bytes, filename: str) -> dict:
         "text_sample":        ""
     }
 
-    pdf_text = data.decode("latin-1", errors="replace")
+    # Use decompressed content for keyword scanning
+    pdf_text = _extract_pdf_raw_text(data).decode("latin-1", errors="replace")
 
     dangerous_keywords = {
         "/JavaScript": "Embedded JavaScript — executes on PDF open",
@@ -481,8 +545,10 @@ def _analyze_pdf(data: bytes, filename: str) -> dict:
     findings["has_launch"]        = "/Launch"     in action_keys
     findings["has_embedded_file"] = "/EmbeddedFile" in action_keys
 
-    url_pattern = re.compile(rb'https?://[^\s\x00-\x1f\x7f-\xff<>"]{5,150}', re.IGNORECASE)
-    urls = list({u.decode("utf-8", errors="replace") for u in url_pattern.findall(data)})
+    # Extract URLs from decompressed content
+    decompressed = _extract_pdf_raw_text(data)
+    url_pattern  = re.compile(rb'https?://[^\s\x00-\x1f\x7f-\xff<>"]{5,150}', re.IGNORECASE)
+    urls = list({u.decode("utf-8", errors="replace") for u in url_pattern.findall(decompressed)})
     findings["embedded_urls"] = urls[:20]
 
     if PDFMINER_AVAILABLE:
@@ -497,7 +563,7 @@ def _analyze_pdf(data: bytes, filename: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 6b: ZIP / Office (DOCX/XLSX/PPTX) — returns both zip and macro dicts
+# Step 6b: ZIP / Office (DOCX/XLSX/PPTX)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _analyze_zip_office(data: bytes, filename: str) -> dict:
@@ -506,13 +572,13 @@ def _analyze_zip_office(data: bytes, filename: str) -> dict:
     stored at a separate top-level key in the final result dict.
     """
     zip_info = {
-        "file_count":          0,
-        "file_list":           [],
-        "nested_executables":  [],
-        "external_rels":       [],
+        "file_count":            0,
+        "file_list":             [],
+        "nested_executables":    [],
+        "external_rels":         [],
         "is_password_protected": False,
-        "zip_findings":        [],
-        "embedded_urls":       [],
+        "zip_findings":          [],
+        "embedded_urls":         [],
     }
     macro_info = {
         "has_macros":      False,
@@ -528,12 +594,11 @@ def _analyze_zip_office(data: bytes, filename: str) -> dict:
         file_list = zf.namelist()
         zip_info["file_count"] = len(file_list)
 
-        # Structured file list with suspicion flag
-        structured = []
         dangerous_exts = {".exe", ".dll", ".bat", ".cmd", ".ps1", ".vbs", ".js"}
+        structured = []
         for name in file_list[:50]:
-            ext         = os.path.splitext(name)[1].lower()
-            is_sus      = ext in dangerous_exts
+            ext    = os.path.splitext(name)[1].lower()
+            is_sus = ext in dangerous_exts
             structured.append({"name": name, "suspicious": is_sus})
             if is_sus:
                 zip_info["nested_executables"].append(name)
@@ -823,12 +888,12 @@ def _analyze_script(data: bytes, filename: str) -> dict:
 
 def _analyze_executable(data: bytes, filename: str) -> dict:
     findings = {
-        "is_pe":                   False,
-        "is_elf":                  False,
-        "imported_strings":        [],
-        "has_upx":                 False,
-        "has_suspicious_imports":  False,
-        "exe_findings":            [],
+        "is_pe":                  False,
+        "is_elf":                 False,
+        "imported_strings":       [],
+        "has_upx":                False,
+        "has_suspicious_imports": False,
+        "exe_findings":           [],
     }
 
     if data[:2] == b'\x4d\x5a':
@@ -863,7 +928,7 @@ def _analyze_executable(data: bytes, filename: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NEW Step 7: VirusTotal hash lookup
+# Step 7: VirusTotal hash lookup
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _vt_lookup(sha256: str) -> Optional[dict]:
@@ -871,20 +936,9 @@ def _vt_lookup(sha256: str) -> Optional[dict]:
     Look up the SHA-256 hash against the VirusTotal public API v3.
     Requires VIRUSTOTAL_API_KEY environment variable or Flask config.
     Returns a summary dict or None if no API key is configured.
-
-    Result dict:
-        {
-          "malicious":   int,   number of engines flagging as malicious
-          "undetected":  int,
-          "harmless":    int,
-          "total":       int,
-          "permalink":   str,
-          "last_analysis_date": str | None
-        }
     """
     api_key = os.environ.get("VIRUSTOTAL_API_KEY", "")
     if not api_key:
-        # Try Flask app config if we're in a request context
         try:
             from flask import current_app
             api_key = current_app.config.get("VT_API_KEY", "")
@@ -937,7 +991,7 @@ def _vt_lookup(sha256: str) -> Optional[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NEW Step 8: Aggregate embedded URLs from all analysis types
+# Step 8: Aggregate embedded URLs from all analysis types
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _collect_urls(pdf_analysis: dict, html_analysis: dict, zip_analysis: dict) -> list:
@@ -957,7 +1011,7 @@ def _collect_urls(pdf_analysis: dict, html_analysis: dict, zip_analysis: dict) -
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 9: Verdict computation  (FIX: returns uppercase verdict strings)
+# Step 9: Verdict computation
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_verdict(
@@ -969,10 +1023,8 @@ def _compute_verdict(
 ) -> tuple:
     """
     Returns (verdict, risk_score, risk_flags, verdict_reasons).
-
-    FIX: verdict is now uppercase — "CLEAN" / "SUSPICIOUS" / "MALICIOUS".
-    Previously returned title-case "Clean" which caused scan_router's
-    label_map.get("Clean") to fail and default every result to SUSPICIOUS.
+    Verdict is uppercase — "CLEAN" / "SUSPICIOUS" / "MALICIOUS" —
+    to match scan_router label_map keys.
     """
     score   = 0.0
     flags   = []
@@ -1030,7 +1082,7 @@ def _compute_verdict(
             reasons.append("PDF has an OpenAction that runs on open.")
 
     # Office macros
-    if file_type in ("docx", "xlsx", "pptx", "ole", "doc", "xls"):
+    elif file_type in ("docx", "xlsx", "pptx", "ole", "doc", "xls"):
         if macro_analysis.get("has_macros"):
             score += 15; flags.append("OFFICE_MACRO_DETECTED")
             reasons.append("VBA macro detected in Office document.")
@@ -1079,7 +1131,6 @@ def _compute_verdict(
 
     risk_score = round(min(score, 100.0), 2)
 
-    # FIX: uppercase verdicts to match scan_router label_map
     if risk_score >= 70:
         verdict = "MALICIOUS"
     elif risk_score >= 30:
@@ -1099,31 +1150,31 @@ def _compute_verdict(
 
 def _error_result(filename: str, message: str) -> dict:
     return {
-        "filename":          filename,
-        "file_type":         "unknown",
-        "file_category":     "unknown",
-        "file_size":         0,
-        "hashes":            {"md5": "", "sha1": "", "sha256": ""},
-        "entropy":           0.0,
-        "is_packed":         False,
-        "is_high_entropy":   False,
-        "type_mismatch":     False,
-        "yara_matches":      [],
-        "static_findings":   [],
-        "suspicious_strings":[],
-        "pdf_analysis":      {},
-        "macro_analysis":    {},
-        "html_analysis":     {},
-        "zip_analysis":      {},
-        "script_analysis":   {},
-        "exe_analysis":      {},
-        "embedded_urls":     [],
-        "vt_result":         None,
-        "known_bad":         False,
-        "verdict":           "UNKNOWN",
-        "risk_score":        0.0,
-        "risk_flags":        ["ANALYSIS_ERROR"],
-        "verdict_reasons":   [message],
-        "analyzed_at":       datetime.utcnow().isoformat() + "Z",
-        "error":             message
+        "filename":           filename,
+        "file_type":          "unknown",
+        "file_category":      "unknown",
+        "file_size":          0,
+        "hashes":             {"md5": "", "sha1": "", "sha256": ""},
+        "entropy":            0.0,
+        "is_packed":          False,
+        "is_high_entropy":    False,
+        "type_mismatch":      False,
+        "yara_matches":       [],
+        "static_findings":    [],
+        "suspicious_strings": [],
+        "pdf_analysis":       {},
+        "macro_analysis":     {},
+        "html_analysis":      {},
+        "zip_analysis":       {},
+        "script_analysis":    {},
+        "exe_analysis":       {},
+        "embedded_urls":      [],
+        "vt_result":          None,
+        "known_bad":          False,
+        "verdict":            "UNKNOWN",
+        "risk_score":         0.0,
+        "risk_flags":         ["ANALYSIS_ERROR"],
+        "verdict_reasons":    [message],
+        "analyzed_at":        datetime.utcnow().isoformat() + "Z",
+        "error":              message
     }
