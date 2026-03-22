@@ -1,4 +1,4 @@
-# file_analyzer.py
+# backend/modules/file_analyzer.py
 # File & Attachment Analysis Module.
 #
 # FIXES IN THIS VERSION:
@@ -39,6 +39,14 @@
 #      like "powershell" or "cmd.exe" are invisible to raw-byte scanners.
 #      _run_yara_scan() and _extract_suspicious_strings() both now accept a
 #      file_type argument and automatically decompress PDF streams first.
+#
+# CAPA INTEGRATION (this version):
+#  12. _run_capa_analysis() — behavioral capability detection using Mandiant
+#      CAPA. Maps capabilities to MITRE ATT&CK tactics and MBC objectives.
+#      Only runs on PE (EXE/DLL) and ELF binaries. Requires flare-capa and
+#      backend/capa_rules to be present; degrades gracefully if either is
+#      missing. Adds capa_analysis to the result dict and feeds into
+#      _compute_verdict() for risk scoring.
 
 import os
 import re
@@ -48,6 +56,8 @@ import zlib
 import hashlib
 import logging
 import zipfile
+import tempfile
+import subprocess
 import requests as _requests
 from typing import Optional
 from datetime import datetime
@@ -77,11 +87,36 @@ except ImportError:
     logger.warning("olefile not installed — Office macro analysis disabled")
 
 try:
+    from oletools.olevba import VBA_Parser
+    OLETOOLS_AVAILABLE = True
+    logger.info("oletools available — VBA source extraction enabled")
+except ImportError:
+    OLETOOLS_AVAILABLE = False
+    logger.warning(
+        "oletools not installed — VBA source preview disabled. "
+        "Run: pip install oletools"
+    )
+ 
+
+try:
     from pdfminer.high_level import extract_text as pdf_extract_text
     PDFMINER_AVAILABLE = True
 except ImportError:
     PDFMINER_AVAILABLE = False
     logger.warning("pdfminer.six not installed — PDF text extraction disabled")
+
+# ── CAPA optional import ──────────────────────────────────────────────────────
+try:
+    import capa.main  # noqa: F401 — imported for availability check only
+    CAPA_AVAILABLE = True
+    logger.info("CAPA available — behavioral capability detection enabled")
+except ImportError:
+    CAPA_AVAILABLE = False
+    logger.warning(
+        "flare-capa not installed — CAPA detection disabled. "
+        "Run: pip install flare-capa && "
+        "git clone https://github.com/mandiant/capa-rules backend/capa_rules"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -91,6 +126,7 @@ except ImportError:
 _module_dir    = os.path.dirname(os.path.abspath(__file__))
 _backend_dir   = os.path.dirname(_module_dir)
 YARA_RULES_DIR = os.path.join(_backend_dir, "yara_rules")
+CAPA_RULES_PATH = os.path.join(_backend_dir, "capa_rules")
 
 ENTROPY_SUSPICIOUS = 6.5
 ENTROPY_PACKED     = 7.2
@@ -128,6 +164,14 @@ SUSPICIOUS_STRINGS = [
     b'ADODB.Stream', b'unescape', b'launchURL',
 ]
 
+_VBA_SUSPICIOUS_KEYWORDS = [
+    "Shell", "CreateObject", "AutoOpen", "URLDownloadToFile",
+    "WScript", "PowerShell", "cmd.exe", "reg add", "net user",
+    "Base64", "EncodedCommand", "Document_Open", "Auto_Open",
+    "Workbook_Open", "GetObject", "environ", "Chr(", "Asc(",
+    "CallByName", "Application.Run", "MacroSecurity",
+]
+
 EXTENSION_MAP = {
     '.pdf':  'document', '.docx': 'document', '.doc':  'document',
     '.xlsx': 'document', '.xls':  'document', '.pptx': 'document',
@@ -151,6 +195,47 @@ EXPECTED_MAGIC = {
     '.pdf':  'pdf',
     '.png':  'png',  '.jpg': 'jpg',  '.jpeg': 'jpg',
     '.gif':  'gif',
+}
+
+# CAPA: file types that are eligible for behavioral analysis
+_CAPA_ELIGIBLE_TYPES = frozenset({"exe", "elf", "dll"})
+
+# CAPA: namespace prefix → severity label
+_CAPA_SEVERITY_MAP = {
+    "ransomware":         "CRITICAL",
+    "command-and-control":"CRITICAL",
+    "exfiltration":       "CRITICAL",
+    "credential-access":  "CRITICAL",
+    "spyware":            "CRITICAL",
+    "anti-analysis":      "HIGH",
+    "defense-evasion":    "HIGH",
+    "execution":          "HIGH",
+    "persistence":        "HIGH",
+    "privilege-escalation":"HIGH",
+    "lateral-movement":   "HIGH",
+    "impact":             "HIGH",
+    "collection":         "MEDIUM",
+    "data-manipulation":  "MEDIUM",
+    "discovery":          "MEDIUM",
+}
+
+# CAPA: namespace prefix → risk score contribution (total capped at 35)
+_CAPA_SCORE_MAP = {
+    "anti-analysis":       25.0,
+    "collection":          20.0,
+    "command-and-control": 30.0,
+    "credential-access":   28.0,
+    "data-manipulation":   20.0,
+    "defense-evasion":     25.0,
+    "discovery":           10.0,
+    "execution":           22.0,
+    "exfiltration":        28.0,
+    "impact":              30.0,
+    "lateral-movement":    25.0,
+    "persistence":         22.0,
+    "privilege-escalation":28.0,
+    "ransomware":          35.0,
+    "spyware":             28.0,
 }
 
 
@@ -185,7 +270,7 @@ def _get_yara_rules():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PDF stream decompressor  ← NEW (Fix #11)
+# PDF stream decompressor  ← Fix #11
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_pdf_raw_text(data: bytes) -> bytes:
@@ -193,15 +278,6 @@ def _extract_pdf_raw_text(data: bytes) -> bytes:
     Decompress all FlateDecode (zlib) content streams inside a PDF so that
     string scanners and YARA rules can find plaintext patterns that were
     compressed by the PDF writer (e.g. ReportLab always uses zlib by default).
-
-    Strategy:
-      1. Find every stream...endstream blob in the raw PDF bytes.
-      2. Try zlib.decompress() on each blob.
-      3. Concatenate all successfully decompressed payloads.
-      4. Return original bytes + decompressed bytes so uncompressed objects
-         (metadata, cross-reference table, raw string literals) are also covered.
-
-    This is the same approach used by pdfid, peepdf, and pdf-parser.
     """
     stream_re = re.compile(rb'stream\r?\n(.*?)\r?\nendstream', re.DOTALL)
     extra = bytearray()
@@ -211,10 +287,233 @@ def _extract_pdf_raw_text(data: bytes) -> bytes:
         try:
             extra += zlib.decompress(blob)
         except Exception:
-            # Not a zlib stream (could be uncompressed, JPEG, etc.) — keep raw
             extra += blob
 
     return bytes(data) + bytes(extra)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CAPA behavioral analysis  ← NEW (Fix #12)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _run_capa_analysis(file_bytes: bytes, filename: str, file_type: str) -> dict:
+    """
+    Run Mandiant CAPA behavioral capability detection on the file.
+
+    CAPA maps binary capabilities to MITRE ATT&CK tactics and the Malware
+    Behavior Catalog (MBC). Unlike YARA (byte signatures), CAPA identifies
+    WHAT a binary can DO — e.g. "receive data on TCP socket", "persist via
+    registry run key", "encrypt data using AES".
+
+    Supported file types: PE (exe/dll) and ELF binaries only.
+    Requires: pip install flare-capa
+              git clone https://github.com/mandiant/capa-rules backend/capa_rules
+
+    Returns a dict with keys:
+        available         bool   — False if CAPA unavailable or unsupported type
+        capabilities      list   — up to 50 capability dicts, CRITICAL-first
+        attack_tactics    list   — sorted unique ATT&CK tactic strings
+        mbc_objectives    list   — sorted unique MBC objective strings
+        namespace_summary dict   — namespace → count mapping
+        highest_severity  str    — "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "NONE"
+        risk_contribution float  — score contribution (0–35)
+        error             str|None
+    """
+    _empty = {
+        "available":        False,
+        "capabilities":     [],
+        "attack_tactics":   [],
+        "mbc_objectives":   [],
+        "namespace_summary":{},
+        "highest_severity": "NONE",
+        "risk_contribution":0.0,
+        "error":            None,
+    }
+
+    # ── Guard: only PE/ELF binaries ──────────────────────────────────────────
+    if file_type not in _CAPA_ELIGIBLE_TYPES:
+        result = dict(_empty)
+        result["error"] = (
+            f"CAPA only analyses PE (EXE/DLL) and ELF binaries. "
+            f"This file was identified as '{file_type}'. "
+            f"CAPA is automatically applied to executable file uploads."
+        )
+        return result
+
+    # ── Guard: CAPA Python package ────────────────────────────────────────────
+    if not CAPA_AVAILABLE:
+        result = dict(_empty)
+        result["error"] = (
+            "flare-capa is not installed. "
+            "Run: pip install flare-capa && "
+            "git clone https://github.com/mandiant/capa-rules backend/capa_rules"
+        )
+        return result
+
+    # ── Guard: rules directory ────────────────────────────────────────────────
+    if not os.path.isdir(CAPA_RULES_PATH):
+        result = dict(_empty)
+        result["error"] = (
+            f"CAPA rules directory not found at: {CAPA_RULES_PATH}. "
+            "Run: git clone https://github.com/mandiant/capa-rules backend/capa_rules"
+        )
+        return result
+
+    # ── Write to temp file, run CAPA, delete in finally ──────────────────────
+    tmp_path = None
+    try:
+        suffix = ".exe" if file_type in ("exe", "dll") else ".elf"
+        with tempfile.NamedTemporaryFile(
+            suffix=suffix, delete=False, prefix="phishguard_capa_"
+        ) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+
+        # Run CAPA as a subprocess: capa --format json -q -r <rules> <file>
+        proc = subprocess.run(
+            [
+                "capa",
+                "--format", "json",
+                "-q",
+                "-r", CAPA_RULES_PATH,
+                tmp_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,  # 2 minute hard limit
+        )
+
+        raw_output = proc.stdout.strip()
+        if not raw_output:
+            # CAPA may write errors to stderr on unsupported files
+            err_msg = proc.stderr.strip()[:300] if proc.stderr else "No output from CAPA."
+            result = dict(_empty)
+            result["error"] = f"CAPA produced no output: {err_msg}"
+            return result
+
+        capa_json = json.loads(raw_output)
+
+    except subprocess.TimeoutExpired:
+        result = dict(_empty)
+        result["error"] = "CAPA analysis timed out (>120s)."
+        return result
+    except json.JSONDecodeError as je:
+        result = dict(_empty)
+        result["error"] = f"Failed to parse CAPA JSON output: {je}"
+        return result
+    except FileNotFoundError:
+        # 'capa' binary not on PATH even though the Python package is installed
+        result = dict(_empty)
+        result["error"] = (
+            "CAPA binary not found on PATH. "
+            "Ensure flare-capa is installed in the active virtualenv: "
+            "pip install flare-capa"
+        )
+        return result
+    except Exception as e:
+        result = dict(_empty)
+        result["error"] = f"CAPA execution error: {str(e)[:200]}"
+        return result
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+    # ── Parse CAPA JSON output ────────────────────────────────────────────────
+    capabilities     = []
+    attack_tactics   = set()
+    mbc_objectives   = set()
+    namespace_counts = {}
+    seen_namespaces_for_score = set()
+    risk_contribution = 0.0
+
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+
+    try:
+        rules_data = capa_json.get("rules", {})
+        for rule_name, rule_info in rules_data.items():
+            meta      = rule_info.get("meta", {})
+            namespace = meta.get("namespace", "other") or "other"
+
+            # Determine severity from namespace prefix
+            severity = "LOW"
+            for ns_key, sev in _CAPA_SEVERITY_MAP.items():
+                if namespace.lower().startswith(ns_key):
+                    severity = sev
+                    break
+
+            # Extract ATT&CK mappings
+            attack_info   = meta.get("attack", []) or []
+            tactic_list   = []
+            technique_list = []
+            for entry in attack_info:
+                tactic = entry.get("tactic", "")
+                tech   = entry.get("technique", "")
+                sub    = entry.get("subtechnique", "")
+                if tactic:
+                    attack_tactics.add(tactic)
+                    tactic_list.append(tactic)
+                if tech:
+                    label = f"{tech} ({sub})" if sub else tech
+                    technique_list.append(label)
+
+            # Extract MBC mappings
+            mbc_info = meta.get("mbc", []) or []
+            mbc_list = []
+            for entry in mbc_info:
+                obj  = entry.get("objective", "")
+                beh  = entry.get("behavior",  "")
+                if obj:
+                    mbc_objectives.add(obj)
+                    label = f"{obj}: {beh}" if beh else obj
+                    mbc_list.append(label)
+
+            # Count namespaces
+            ns_root = namespace.split("/")[0].lower()
+            namespace_counts[ns_root] = namespace_counts.get(ns_root, 0) + 1
+
+            # Accumulate risk score — each unique namespace prefix contributes once
+            if ns_root not in seen_namespaces_for_score:
+                seen_namespaces_for_score.add(ns_root)
+                contrib = _CAPA_SCORE_MAP.get(ns_root, 5.0)
+                risk_contribution = min(risk_contribution + contrib, 35.0)
+
+            capabilities.append({
+                "name":       rule_name,
+                "namespace":  namespace,
+                "severity":   severity,
+                "attack_tactics":   tactic_list,
+                "attack_techniques":technique_list,
+                "mbc":        mbc_list,
+                "scope":      meta.get("scope", "function"),
+            })
+
+    except Exception as parse_err:
+        logger.warning("CAPA JSON parse error: %s", parse_err)
+        result = dict(_empty)
+        result["error"] = f"CAPA output parse error: {str(parse_err)[:200]}"
+        return result
+
+    # ── Sort capabilities: CRITICAL → HIGH → MEDIUM → LOW ────────────────────
+    capabilities.sort(key=lambda c: severity_order.get(c["severity"], 3))
+
+    # ── Determine highest severity ────────────────────────────────────────────
+    highest_severity = "NONE"
+    if capabilities:
+        highest_severity = capabilities[0]["severity"]
+
+    return {
+        "available":         True,
+        "capabilities":      capabilities[:50],
+        "attack_tactics":    sorted(attack_tactics),
+        "mbc_objectives":    sorted(mbc_objectives),
+        "namespace_summary": namespace_counts,
+        "highest_severity":  highest_severity,
+        "risk_contribution": round(risk_contribution, 2),
+        "error":             None,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -229,31 +528,8 @@ def analyze_file(
     """
     Run complete static analysis on uploaded file bytes.
 
-    Returns a flat result dict with these top-level keys so that both
-    scan_router.py and attachments.js can read them without extra nesting:
-
-        filename, file_type, file_category, file_size
-        hashes: {md5, sha1, sha256}
-        entropy, is_packed, is_high_entropy
-        type_mismatch: bool          ← extension vs magic bytes disagree
-        yara_matches: list
-        static_findings: list        (raw list of finding dicts)
-        suspicious_strings: list     ← ALIAS of static_findings for the JS
-        pdf_analysis:    dict | {}   ← type-specific, top-level for JS
-        macro_analysis:  dict | {}
-        html_analysis:   dict | {}
-        zip_analysis:    dict | {}
-        script_analysis: dict | {}
-        exe_analysis:    dict | {}
-        embedded_urls:   list        ← aggregated from all type analyses
-        vt_result:       dict | None ← VirusTotal hash lookup (optional)
-        known_bad:       bool        ← true if VT detects >= 3 engines
-        verdict:         str         "CLEAN" | "SUSPICIOUS" | "MALICIOUS"
-        risk_score:      float       0-100
-        risk_flags:      list[str]
-        verdict_reasons: list[str]   ← human-readable explanation lines
-        email_id:        int | None
-        analyzed_at:     str
+    Returns a flat result dict. See inline documentation for all keys.
+    New key in this version: capa_analysis (dict).
     """
     if len(file_bytes) > MAX_FILE_SIZE:
         return _error_result(
@@ -274,10 +550,10 @@ def analyze_file(
     is_packed       = entropy >= ENTROPY_PACKED
     is_high_entropy = entropy >= ENTROPY_SUSPICIOUS
 
-    # Step 4 — YARA  (pass file_type so PDFs get decompressed first)
+    # Step 4 — YARA
     yara_matches = _run_yara_scan(file_bytes, filename, file_type)
 
-    # Step 5 — Suspicious strings  (pass file_type so PDFs get decompressed first)
+    # Step 5 — Suspicious strings
     static_findings = _extract_suspicious_strings(file_bytes, file_type)
 
     # Step 6 — Type-specific analysis
@@ -303,6 +579,9 @@ def analyze_file(
     elif file_type in ("exe", "elf", "dll"):
         exe_analysis = _analyze_executable(file_bytes, filename)
 
+    # Step 6g — CAPA behavioral analysis (PE/ELF only)
+    capa_analysis = _run_capa_analysis(file_bytes, filename, file_type)
+
     # Step 7 — VirusTotal hash lookup (optional)
     vt_result = _vt_lookup(hashes["sha256"])
     known_bad = False
@@ -327,6 +606,7 @@ def analyze_file(
         file_type       = file_type,
         type_mismatch   = type_mismatch,
         known_bad       = known_bad,
+        capa_analysis   = capa_analysis,  # ← NEW
     )
 
     return {
@@ -348,6 +628,7 @@ def analyze_file(
         "zip_analysis":       zip_analysis,
         "script_analysis":    script_analysis,
         "exe_analysis":       exe_analysis,
+        "capa_analysis":      capa_analysis,   # ← NEW
         "embedded_urls":      embedded_urls,
         "vt_result":          vt_result,
         "known_bad":          known_bad,
@@ -436,24 +717,14 @@ def _compute_entropy(data: bytes) -> float:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 4: YARA scanning  ← FIXED: decompresses PDF streams before scanning
+# Step 4: YARA scanning
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _run_yara_scan(data: bytes, filename: str, file_type: str = "") -> list:
-    """
-    Scan file bytes with compiled YARA rules.
-
-    For PDF files, content streams are decompressed before scanning so that
-    string patterns inside FlateDecode-compressed streams are visible to YARA.
-    Without this step, patterns like 'powershell' stored in a ReportLab-
-    generated PDF would never match because they exist as zlib-compressed
-    binary, not as readable ASCII bytes.
-    """
     rules = _get_yara_rules()
     if rules is None:
         return []
 
-    # Decompress PDF streams so YARA string patterns can match
     scan_data = _extract_pdf_raw_text(data) if file_type == "pdf" else data
 
     matches = []
@@ -472,19 +743,10 @@ def _run_yara_scan(data: bytes, filename: str, file_type: str = "") -> list:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 5: Suspicious string extraction  ← FIXED: decompresses PDF streams
+# Step 5: Suspicious string extraction
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _extract_suspicious_strings(data: bytes, file_type: str = "") -> list:
-    """
-    Search file bytes for known-suspicious byte patterns.
-
-    For PDF files, content streams are decompressed before scanning.
-    ReportLab and most PDF writers compress streams with zlib by default,
-    making all text content invisible to a raw-byte string search.
-    Decompressing first ensures we catch patterns buried inside streams.
-    """
-    # Decompress PDF streams so patterns inside FlateDecode content are visible
     scan_data  = _extract_pdf_raw_text(data) if file_type == "pdf" else data
     data_lower = scan_data.lower()
 
@@ -522,7 +784,6 @@ def _analyze_pdf(data: bytes, filename: str) -> dict:
         "text_sample":        ""
     }
 
-    # Use decompressed content for keyword scanning
     pdf_text = _extract_pdf_raw_text(data).decode("latin-1", errors="replace")
 
     dangerous_keywords = {
@@ -545,7 +806,6 @@ def _analyze_pdf(data: bytes, filename: str) -> dict:
     findings["has_launch"]        = "/Launch"     in action_keys
     findings["has_embedded_file"] = "/EmbeddedFile" in action_keys
 
-    # Extract URLs from decompressed content
     decompressed = _extract_pdf_raw_text(data)
     url_pattern  = re.compile(rb'https?://[^\s\x00-\x1f\x7f-\xff<>"]{5,150}', re.IGNORECASE)
     urls = list({u.decode("utf-8", errors="replace") for u in url_pattern.findall(decompressed)})
@@ -567,10 +827,6 @@ def _analyze_pdf(data: bytes, filename: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _analyze_zip_office(data: bytes, filename: str) -> dict:
-    """
-    Returns {"zip_analysis": {...}, "macro_analysis": {...}} so each can be
-    stored at a separate top-level key in the final result dict.
-    """
     zip_info = {
         "file_count":            0,
         "file_list":             [],
@@ -656,32 +912,50 @@ def _analyze_zip_office(data: bytes, filename: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _analyze_ole(data: bytes, filename: str) -> dict:
+    """
+    Analyse a legacy OLE/CFB Office file (.doc, .xls, .ppt etc.)
+ 
+    Phase 6 addition:
+      - If oletools is installed, attempts to extract VBA source code using
+        VBA_Parser. Extracts up to 3000 chars of raw source, sanitises
+        non-printable characters, and scans for a set of suspicious keywords.
+      - vba_source_preview: str   — sanitised VBA source (max 3000 chars)
+      - suspicious_vba_keywords: list[str] — keywords found in source
+ 
+    Returns dict with keys:
+        has_macros, has_vba_project, vba_streams, macro_keywords,
+        ole_streams, macro_findings,
+        vba_source_preview, suspicious_vba_keywords   ← NEW
+    """
     findings = {
-        "has_macros":      False,
-        "has_vba_project": False,
-        "vba_streams":     [],
-        "macro_keywords":  [],
-        "ole_streams":     [],
-        "macro_findings":  [],
+        "has_macros":              False,
+        "has_vba_project":         False,
+        "vba_streams":             [],
+        "macro_keywords":          [],
+        "ole_streams":             [],
+        "macro_findings":          [],
+        "vba_source_preview":      "",        # ← NEW
+        "suspicious_vba_keywords": [],        # ← NEW
     }
-
+ 
     if not OLEFILE_AVAILABLE:
         findings["note"] = "olefile not installed — OLE analysis skipped"
         return findings
-
+ 
     try:
         import io
         ole     = olefile.OleFileIO(io.BytesIO(data))
         streams = ole.listdir()
         findings["ole_streams"] = ["/".join(s) for s in streams[:20]]
-
+ 
         for stream_path in ["Macros/VBA", "_VBA_PROJECT_CUR/VBA", "VBA"]:
-            if ole.exists(stream_path.split("/")):
+            parts = stream_path.split("/")
+            if ole.exists(parts):
                 findings["has_macros"]      = True
                 findings["has_vba_project"] = True
                 findings["vba_streams"].append(stream_path)
                 findings["macro_findings"].append(f"VBA stream found: {stream_path}")
-
+ 
         suspicious_kws = [
             b"Shell", b"CreateObject", b"AutoOpen",
             b"Document_Open", b"Auto_Open", b"Workbook_Open"
@@ -699,11 +973,64 @@ def _analyze_ole(data: bytes, filename: str) -> dict:
             except Exception:
                 continue
         ole.close()
-
+ 
     except Exception as e:
         findings["error"] = str(e)[:100]
-
+ 
+    # ── Phase 6: VBA source extraction via oletools ────────────────────────
+    if OLETOOLS_AVAILABLE:
+        try:
+            import io as _io
+            vba_parser = VBA_Parser(filename, data=data)
+ 
+            if vba_parser.detect_vba_macros():
+                findings["has_macros"]      = True
+                findings["has_vba_project"] = True
+ 
+                # Collect raw VBA source from all modules
+                source_parts = []
+                for (vba_filename, vba_stream, vba_type, vba_code) in \
+                        vba_parser.extract_macros():
+                    if vba_code and isinstance(vba_code, str):
+                        header = f"' ── Module: {vba_filename} ({vba_type}) ──\n"
+                        source_parts.append(header + vba_code.strip())
+ 
+                if source_parts:
+                    raw_source = "\n\n".join(source_parts)
+ 
+                    # Sanitise: remove non-printable chars except newline/tab
+                    sanitised = re.sub(
+                        r'[^\x09\x0a\x0d\x20-\x7e]', '.', raw_source
+                    )
+ 
+                    # Cap at 3000 characters
+                    preview = sanitised[:3000]
+                    if len(sanitised) > 3000:
+                        preview += "\n\n[... truncated — showing first 3000 chars ...]"
+ 
+                    findings["vba_source_preview"] = preview
+ 
+                    # Scan source for suspicious keywords
+                    source_lower = raw_source.lower()
+                    found_kws = []
+                    for kw in _VBA_SUSPICIOUS_KEYWORDS:
+                        if kw.lower() in source_lower and kw not in found_kws:
+                            found_kws.append(kw)
+                    findings["suspicious_vba_keywords"] = found_kws
+ 
+                    if found_kws:
+                        findings["macro_findings"].append(
+                            f"Suspicious VBA keywords in source: {', '.join(found_kws[:5])}"
+                        )
+ 
+            vba_parser.close()
+ 
+        except Exception as vba_err:
+            logger.debug("oletools VBA extraction failed for %s: %s", filename, vba_err)
+            findings["vba_source_note"] = f"VBA source extraction failed: {str(vba_err)[:100]}"
+ 
     return findings
+ 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -932,11 +1259,6 @@ def _analyze_executable(data: bytes, filename: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _vt_lookup(sha256: str) -> Optional[dict]:
-    """
-    Look up the SHA-256 hash against the VirusTotal public API v3.
-    Requires VIRUSTOTAL_API_KEY environment variable or Flask config.
-    Returns a summary dict or None if no API key is configured.
-    """
     api_key = os.environ.get("VIRUSTOTAL_API_KEY", "")
     if not api_key:
         try:
@@ -995,7 +1317,6 @@ def _vt_lookup(sha256: str) -> Optional[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _collect_urls(pdf_analysis: dict, html_analysis: dict, zip_analysis: dict) -> list:
-    """Deduplicate and merge embedded URLs from all analysis types."""
     seen = set()
     urls = []
     for source in (
@@ -1011,7 +1332,7 @@ def _collect_urls(pdf_analysis: dict, html_analysis: dict, zip_analysis: dict) -
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 9: Verdict computation
+# Step 9: Verdict computation  ← UPDATED: accepts capa_analysis
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_verdict(
@@ -1019,12 +1340,12 @@ def _compute_verdict(
     pdf_analysis, macro_analysis, html_analysis,
     zip_analysis, script_analysis, exe_analysis,
     entropy, is_packed, file_type,
-    type_mismatch=False, known_bad=False
+    type_mismatch=False, known_bad=False,
+    capa_analysis=None,         # ← NEW parameter
 ) -> tuple:
     """
     Returns (verdict, risk_score, risk_flags, verdict_reasons).
-    Verdict is uppercase — "CLEAN" / "SUSPICIOUS" / "MALICIOUS" —
-    to match scan_router label_map keys.
+    Verdict is uppercase — "CLEAN" / "SUSPICIOUS" / "MALICIOUS".
     """
     score   = 0.0
     flags   = []
@@ -1129,6 +1450,35 @@ def _compute_verdict(
             score += 15; flags.append("SUSPICIOUS_API_IMPORTS")
             reasons.append("Suspicious Windows API imports found.")
 
+    # ── CAPA behavioral analysis contribution ─────────────────────────────────
+    if capa_analysis and capa_analysis.get("available") and capa_analysis.get("capabilities"):
+        cap_count  = len(capa_analysis["capabilities"])
+        risk_contrib = capa_analysis.get("risk_contribution", 0.0)
+        highest_sev  = capa_analysis.get("highest_severity", "NONE")
+        tactics      = capa_analysis.get("attack_tactics", [])
+
+        # Add CAPA risk contribution to total score
+        score += risk_contrib
+
+        if highest_sev == "CRITICAL":
+            top3_tactics = ", ".join(tactics[:3]) if tactics else "unknown"
+            flags.append(f"CAPA_CRITICAL: {cap_count} capabilities detected")
+            reasons.append(
+                f"CAPA detected {cap_count} behavioral capability(-ies) at CRITICAL severity. "
+                f"Top ATT&CK tactics: {top3_tactics}."
+            )
+        elif highest_sev == "HIGH":
+            flags.append(f"CAPA_HIGH: {cap_count} capabilities detected")
+            reasons.append(
+                f"CAPA detected {cap_count} behavioral capability(-ies) at HIGH severity."
+            )
+        elif cap_count > 0:
+            flags.append(f"CAPA_FINDINGS: {cap_count} capabilities detected")
+            reasons.append(
+                f"CAPA detected {cap_count} behavioral indicator(s) in this binary."
+            )
+
+    # ── Final verdict ─────────────────────────────────────────────────────────
     risk_score = round(min(score, 100.0), 2)
 
     if risk_score >= 70:
@@ -1168,6 +1518,16 @@ def _error_result(filename: str, message: str) -> dict:
         "zip_analysis":       {},
         "script_analysis":    {},
         "exe_analysis":       {},
+        "capa_analysis":      {          # ← NEW in error fallback
+            "available":         False,
+            "capabilities":      [],
+            "attack_tactics":    [],
+            "mbc_objectives":    [],
+            "namespace_summary": {},
+            "highest_severity":  "NONE",
+            "risk_contribution": 0.0,
+            "error":             message,
+        },
         "embedded_urls":      [],
         "vt_result":          None,
         "known_bad":          False,

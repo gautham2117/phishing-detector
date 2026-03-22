@@ -15,7 +15,7 @@
     File &amp; Attachment Analysis
   </h1>
   <p class="page-subtitle">
-    Hash verification · YARA rules · Entropy analysis · Macro detection · HTML phishing
+    Hash verification · YARA rules · CAPA behavioral · Entropy analysis · Macro detection · HTML phishing
   </p>
 </div>
 
@@ -33,10 +33,10 @@
         Drag &amp; drop a file here, or <label class="att-browse-label" for="fileInput">browse</label>
       </div>
       <div class="att-drop-types">
-        PDF · DOCX · ZIP · EXE · HTML · JS · Images (max 50 MB)
+        PDF · DOCX · ZIP · EXE · ELF · DLL · HTML · JS · Images (max 50 MB)
       </div>
       <input type="file" id="fileInput" class="att-file-input"
-             accept=".pdf,.doc,.docx,.xls,.xlsx,.zip,.exe,.html,.htm,.js,.png,.jpg,.jpeg,.gif">
+             accept=".pdf,.doc,.docx,.xls,.xlsx,.zip,.exe,.dll,.html,.htm,.js,.png,.jpg,.jpeg,.gif">
     </div>
 
     <div class="att-form-row" style="margin-top:12px">
@@ -80,7 +80,10 @@
     <div class="card att-entropy-card">
       <div class="card-header">
         <span class="card-icon">🌡</span>
-        <span class="card-title">Shannon Entropy</span>
+        <span class="card-title"
+              data-help="Shannon entropy measures randomness in byte distribution. Values above 7.2 suggest the file is packed, encrypted, or compressed — a common malware evasion technique.">
+          Shannon Entropy
+        </span>
       </div>
       <div class="card-body att-entropy-body">
         <div class="att-entropy-value" id="entropyValue">0.00</div>
@@ -127,7 +130,10 @@
   <div class="card" id="yaraCard">
     <div class="card-header">
       <span class="card-icon">🎯</span>
-      <span class="card-title">YARA Rule Matches</span>
+      <span class="card-title"
+            data-help="YARA is a pattern-matching engine used by malware researchers. Each rule defines a specific threat signature using byte sequences, strings, and logical conditions.">
+        YARA Rule Matches
+      </span>
       <span class="att-count-badge" id="yaraCount">0</span>
     </div>
     <div class="card-body">
@@ -136,6 +142,226 @@
       </div>
     </div>
   </div>
+
+  <!-- ── CAPA Behavioral Capabilities ─────────────────────────────────────── -->
+  <div class="card" id="capaCard">
+    <div class="card-header">
+      <span class="card-icon">🧠</span>
+      <span class="card-title"
+            data-help="CAPA (by Mandiant) identifies what a binary CAN DO — not just what bytes it contains. It maps capabilities to MITRE ATT&amp;CK tactics like Persistence, Exfiltration, and Command &amp; Control.">
+        CAPA Behavioral Capabilities
+      </span>
+      <span class="att-count-badge" id="capaCount">0</span>
+    </div>
+
+    <!-- State A: not applicable / not installed — informational message -->
+    <div class="card-body" id="capaUnavailableBody" style="display:none">
+      <div class="att-capa-info-box" id="capaInfoBox">
+        <!-- populated by JS -->
+      </div>
+    </div>
+
+    <!-- State B: results available -->
+    <div class="card-body" id="capaResultsBody" style="display:none">
+
+      <!-- ATT&CK tactics pill row -->
+      <div class="att-capa-section-label">MITRE ATT&amp;CK Tactics Detected</div>
+      <div class="att-capa-tactics-row" id="capaTacticsRow">
+        <!-- populated by JS -->
+      </div>
+
+      <!-- MBC objectives (collapsed by default) -->
+      <div class="att-capa-section-label" id="capaMbcLabel" style="display:none">
+        Malware Behavior Catalog (MBC) Objectives
+      </div>
+      <div class="att-capa-tactics-row" id="capaMbcRow" style="display:none">
+        <!-- populated by JS -->
+      </div>
+
+      <!-- Namespace summary bar chart -->
+      <div class="att-capa-section-label" id="capaNsLabel" style="display:none">
+        Capability Namespace Breakdown
+      </div>
+      <div id="capaNsSummary" style="display:none">
+        <!-- populated by JS -->
+      </div>
+
+      <!-- Capabilities table -->
+      <div class="att-capa-section-label" style="margin-top:16px">
+        Detected Capabilities
+      </div>
+      <div class="table-wrapper" style="margin-top:8px">
+        <table class="data-table" id="capaTable">
+          <thead>
+            <tr>
+              <th>Capability Name</th>
+              <th>Namespace</th>
+              <th>Severity</th>
+              <th>ATT&amp;CK Tactics</th>
+              <th>MBC Objectives</th>
+            </tr>
+          </thead>
+          <tbody id="capaTableBody">
+            <!-- populated by JS -->
+          </tbody>
+        </table>
+      </div>
+
+    </div><!-- /capaResultsBody -->
+  </div><!-- /capaCard -->
+
+  <!-- ── Office Macro Analysis Card ──────────────────────────────────────── -->
+  <div class="card" id="macroCard" style="display:none">
+    <div class="card-header">
+      <span class="card-icon">📝</span>
+      <span class="card-title">Office Macro Analysis</span>
+      <span class="att-count-badge att-badge-danger" id="macroKeywordCount" style="display:none">0</span>
+    </div>
+    <div class="card-body">
+
+      <!-- Stream info -->
+      <div class="att-macro-row">
+        <span class="att-macro-label">VBA Streams</span>
+        <span class="att-macro-value" id="macroStreams">—</span>
+      </div>
+
+      <!-- Keyword tags -->
+      <div class="att-macro-row" style="align-items:flex-start;">
+        <span class="att-macro-label">Keywords</span>
+        <div class="att-tag-list" id="macroKeywords" style="flex:1">
+          <span class="att-empty-note">No keyword detail.</span>
+        </div>
+      </div>
+
+      <!-- Suspicious VBA keywords from source (Phase 6) -->
+      <div id="vbaSuspiciousRow" style="display:none; margin-top:10px;">
+        <div class="att-macro-label" style="margin-bottom:6px;">
+          ⚠ Suspicious Keywords in VBA Source
+        </div>
+        <div class="att-tag-list" id="vbaKeywordsList"></div>
+      </div>
+
+      <!-- VBA Source Preview (Phase 6) ─────────────────────────────────── -->
+      <div id="vbaSourceSection" style="display:none; margin-top:16px;">
+
+        <div class="att-vba-source-header"
+             onclick="toggleVbaSource()"
+             id="vbaSourceToggle">
+          <span class="att-vba-source-title">
+            📄 VBA Source Preview
+          </span>
+          <span class="att-vba-toggle-hint" id="vbaToggleHint">
+            Click to expand
+          </span>
+          <span class="att-vba-chevron" id="vbaChevron">▶</span>
+        </div>
+
+        <div id="vbaSourceBody" style="display:none;">
+          <div class="att-vba-source-note">
+            Raw VBA source extracted by oletools. Showing first 3 000 characters.
+            Keyword highlighting: <span class="vba-kw-sample">keywords</span> in red ·
+            <span class="vba-str-sample">"strings"</span> in green ·
+            <span class="vba-cmt-sample">' comments</span> in muted.
+          </div>
+          <pre class="att-vba-pre" id="vbaSourcePre"></pre>
+        </div>
+
+      </div><!-- /vbaSourceSection -->
+
+    </div><!-- /card-body -->
+  </div><!-- /macroCard -->
+
+  <!-- ── VBA source styles (scoped) ─────────────────────────────────────── -->
+  <style>
+    .att-macro-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+      font-size: 0.85rem;
+    }
+    .att-macro-label {
+      color: var(--text-muted);
+      min-width: 110px;
+      flex-shrink: 0;
+      font-size: 0.80rem;
+    }
+    .att-macro-value {
+      color: var(--text);
+      font-family: monospace;
+      font-size: 0.82rem;
+    }
+
+    /* VBA source header / toggle */
+    .att-vba-source-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      background: var(--bg3);
+      border-radius: 6px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      border: 1px solid var(--border);
+      transition: background 0.15s;
+    }
+    .att-vba-source-header:hover {
+      background: rgba(124, 106, 247, 0.08);
+    }
+    .att-vba-source-title {
+      font-size: 0.84rem;
+      font-weight: 600;
+      color: var(--text);
+      flex: 1;
+    }
+    .att-vba-toggle-hint {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+    .att-vba-chevron {
+      font-size: 11px;
+      color: var(--text-muted);
+      transition: transform 0.2s;
+    }
+    .att-vba-chevron.open {
+      transform: rotate(90deg);
+    }
+
+    /* Source note above the pre block */
+    .att-vba-source-note {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      padding: 8px 0 6px;
+      line-height: 1.5;
+    }
+    .vba-kw-sample  { color: #f87171; font-weight: 600; }
+    .vba-str-sample { color: #4ade80; }
+    .vba-cmt-sample { color: var(--text-muted); font-style: italic; }
+
+    /* The VBA source <pre> block */
+    .att-vba-pre {
+      background: #0d0d14;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 16px;
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.78rem;
+      line-height: 1.65;
+      color: var(--text);
+      overflow-x: auto;
+      white-space: pre;
+      max-height: 480px;
+      overflow-y: auto;
+      margin: 0;
+    }
+
+    /* Syntax highlight spans injected by JS */
+    .vba-keyword  { color: #f87171; font-weight: 600; }
+    .vba-string   { color: #4ade80; }
+    .vba-comment  { color: #6b7280; font-style: italic; }
+    .vba-number   { color: #fbbf24; }
+  </style>
 
   <!-- Suspicious strings -->
   <div class="card" id="stringsCard">
@@ -162,30 +388,89 @@
     </div>
   </div>
 
-  <!-- PDF embedded URLs -->
-  <div class="card" id="pdfUrlsCard" style="display:none">
+  <!-- Archive contents -->
+  <div class="card" id="archiveCard" style="display:none">
     <div class="card-header">
-      <span class="card-icon">🔗</span>
-      <span class="card-title">URLs Extracted from PDF</span>
+      <span class="card-icon">🗜</span>
+      <span class="card-title">Archive Contents</span>
+      <span class="att-count-badge" id="archiveFileCount">0</span>
     </div>
-    <div class="card-body">
-      <ul class="att-url-list" id="pdfUrlList"></ul>
-    </div>
-  </div>
-
-  <!-- Explanation -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-icon">💬</span>
-      <span class="card-title">Analysis Explanation</span>
-    </div>
-    <div class="card-body">
-      <p class="att-explanation" id="explanationText"></p>
-      <div class="att-email-link" id="emailLinkRow" style="display:none">
-        🔗 Linked to Email Scan ID: <a id="emailScanLink" href="#" class="att-link">—</a>
+    <div class="card-body" style="padding:0">
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr><th>Filename</th></tr>
+          </thead>
+          <tbody id="archiveTableBody"></tbody>
+        </table>
       </div>
     </div>
   </div>
+
+  <!-- Embedded URLs -->
+  <div class="card" id="embeddedUrlsCard" style="display:none">
+    <div class="card-header">
+      <span class="card-icon">🔗</span>
+      <span class="card-title">Embedded URLs</span>
+      <span class="att-count-badge" id="embeddedUrlCount">0</span>
+    </div>
+    <div class="card-body">
+      <ul class="att-url-list" id="embeddedUrlList"></ul>
+    </div>
+  </div>
+
+  <!-- ── 3-Tab Explanation Card ────────────────────────────────────────────
+       FIX: All three exp-tab-content divs are now INSIDE #attExpCard.
+       Previously, only the Overview tab was inside the card; File Details
+       and Signatures were orphaned outside it, so they were invisible even
+       when switchExpTab() correctly toggled their .active class.
+  ─────────────────────────────────────────────────────────────────────────── -->
+  <div class="card" id="attExpCard">
+
+    <div class="exp-tab-bar">
+      <button class="exp-tab active" data-tab="att-overview"
+              onclick="switchExpTab('att-overview')">
+        📋 Overview
+      </button>
+      <button class="exp-tab" data-tab="att-file-details"
+              onclick="switchExpTab('att-file-details')">
+        📂 File Details
+      </button>
+      <button class="exp-tab" data-tab="att-signatures"
+              onclick="switchExpTab('att-signatures')">
+        🎯 Signatures &amp; Entropy
+        <span class="exp-tab-badge" id="expBadgeSig"></span>
+      </button>
+    </div>
+
+    <!-- Tab 1: Overview -->
+    <div class="exp-tab-content active" id="exp-tab-att-overview">
+      <div id="attExpOverviewBody">
+        <p class="exp-placeholder">Run a scan to see the analysis.</p>
+      </div>
+    </div>
+
+    <!-- Tab 2: File Details -->
+    <div class="exp-tab-content" id="exp-tab-att-file-details">
+      <div id="attExpFileDetailsBody">
+        <p class="exp-placeholder">No file details yet.</p>
+      </div>
+    </div>
+
+    <!-- Tab 3: Signatures & Entropy -->
+    <div class="exp-tab-content" id="exp-tab-att-signatures">
+      <div id="attExpSignaturesBody">
+        <p class="exp-placeholder">No signatures yet.</p>
+      </div>
+    </div>
+
+    <!-- Email link row lives inside the card, below all tabs -->
+    <div class="att-email-link" id="emailLinkRow" style="display:none;margin-top:14px">
+      🔗 Linked to Email Scan ID:
+      <a id="emailScanLink" href="#" class="att-link">—</a>
+    </div>
+
+  </div><!-- /attExpCard -->
 
 </div><!-- /resultsPanel -->
 
@@ -220,6 +505,251 @@
     </div>
   </div>
 </div>
+
+<!-- ── CAPA-specific styles (scoped, no build step needed) ────────────────── -->
+<style>
+  /* ── Info box shown when CAPA is unavailable ─────────────────────────── */
+  .att-capa-info-box {
+    background: rgba(124, 106, 247, 0.06);
+    border: 1px solid rgba(124, 106, 247, 0.2);
+    border-radius: 6px;
+    padding: 14px 16px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+  .att-capa-info-box .capa-info-title {
+    color: var(--text);
+    font-weight: 600;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .att-capa-info-box code {
+    background: rgba(124, 106, 247, 0.12);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 0.82rem;
+    color: var(--blue);
+  }
+  .att-capa-info-box .capa-setup-steps {
+    margin-top: 8px;
+    padding-left: 0;
+    list-style: none;
+  }
+  .att-capa-info-box .capa-setup-steps li {
+    padding: 3px 0;
+    font-family: monospace;
+    font-size: 0.80rem;
+    color: var(--text);
+  }
+  .att-capa-info-box .capa-setup-steps li::before {
+    content: "$ ";
+    color: var(--green);
+  }
+
+  /* ── Section label inside CAPA card body ─────────────────────────────── */
+  .att-capa-section-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin: 14px 0 8px;
+  }
+  .att-capa-section-label:first-child {
+    margin-top: 0;
+  }
+
+  /* ── ATT&CK tactics / MBC pills row ──────────────────────────────────── */
+  .att-capa-tactics-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+  .att-capa-tactic-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 99px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .att-capa-tactic-pill.sev-critical {
+    background: rgba(248, 113, 113, 0.12);
+    border-color: rgba(248, 113, 113, 0.4);
+    color: #f87171;
+  }
+  .att-capa-tactic-pill.sev-high {
+    background: rgba(251, 191, 36, 0.10);
+    border-color: rgba(251, 191, 36, 0.35);
+    color: #fbbf24;
+  }
+  .att-capa-tactic-pill.sev-medium {
+    background: rgba(124, 106, 247, 0.10);
+    border-color: rgba(124, 106, 247, 0.3);
+    color: var(--blue);
+  }
+  .att-capa-tactic-pill.sev-low,
+  .att-capa-tactic-pill.sev-none {
+    background: rgba(122, 117, 168, 0.10);
+    border-color: rgba(122, 117, 168, 0.25);
+    color: var(--text-muted);
+  }
+
+  /* ── Namespace summary mini-bars ─────────────────────────────────────── */
+  .att-capa-ns-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 5px;
+    font-size: 0.80rem;
+  }
+  .att-capa-ns-name {
+    width: 160px;
+    flex-shrink: 0;
+    color: var(--text);
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .att-capa-ns-bar-bg {
+    flex: 1;
+    height: 6px;
+    background: var(--bg3);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .att-capa-ns-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--blue);
+    transition: width 0.4s ease;
+  }
+  .att-capa-ns-count {
+    width: 28px;
+    text-align: right;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  /* ── Capabilities table severity badges ──────────────────────────────── */
+  .att-capa-sev-badge {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .att-capa-sev-badge.sev-critical {
+    background: rgba(248, 113, 113, 0.15);
+    color: #f87171;
+  }
+  .att-capa-sev-badge.sev-high {
+    background: rgba(251, 191, 36, 0.12);
+    color: #fbbf24;
+  }
+  .att-capa-sev-badge.sev-medium {
+    background: rgba(124, 106, 247, 0.12);
+    color: var(--blue);
+  }
+  .att-capa-sev-badge.sev-low {
+    background: rgba(122, 117, 168, 0.10);
+    color: var(--text-muted);
+  }
+
+  /* ── Table cell sub-text (tactics / mbc list inside table cells) ─────── */
+  .att-capa-cell-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .att-capa-cell-item {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+  }
+  .att-capa-cell-item.primary {
+    color: var(--text);
+    font-size: 0.78rem;
+  }
+
+  /* ── Capability name cell ─────────────────────────────────────────────── */
+  .att-capa-cap-name {
+    font-size: 0.82rem;
+    color: var(--text);
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .att-capa-namespace {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: monospace;
+    margin-top: 2px;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ── Explanation tab bar ──────────────────────────────────────────────── */
+  .exp-tab-bar {
+    display: flex;
+    gap: 2px;
+    border-bottom: 1px solid var(--border);
+    margin: -4px -4px 20px;
+    padding: 0 4px;
+  }
+  .exp-tab {
+    position: relative;
+    padding: 10px 18px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color .15s, border-color .15s;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .exp-tab:hover  { color: var(--text); }
+  .exp-tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+  .exp-tab-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    font-size: 10px;
+    font-weight: 700;
+    background: var(--bg3);
+    color: var(--text-muted);
+  }
+  .exp-tab-content        { display: none; padding: 4px; animation: fadeTabIn .2s ease; }
+  .exp-tab-content.active { display: block; }
+  @keyframes fadeTabIn    { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .exp-placeholder        { color: var(--text-muted); font-style: italic; font-size: 13px; }
+</style>
+
 {% endblock %}
 
 {% block scripts %}

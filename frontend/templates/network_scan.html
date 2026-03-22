@@ -30,7 +30,7 @@
   </p>
 </div>
 
-<!-- ── Consent modal (shown for non-demo targets) ── -->
+<!-- ── Consent modal ── -->
 <div id="consent-overlay"
      style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
             background:rgba(0,0,0,0.65); z-index:9999;
@@ -89,6 +89,10 @@
         <div class="stat-lbl">Admin panels</div>
       </div>
       <div class="stat-box">
+        <div class="stat-num" id="stat-cve">0</div>
+        <div class="stat-lbl">CVEs found</div>
+      </div>
+      <div class="stat-box">
         <div class="stat-num" id="stat-duration">—</div>
         <div class="stat-lbl">Scan duration</div>
       </div>
@@ -112,11 +116,12 @@
           <th>Product</th>
           <th>Version</th>
           <th>Risk</th>
+          <th>CVEs</th>
           <th>Detail</th>
         </tr>
       </thead>
       <tbody id="port-table-body">
-        <tr><td colspan="7" class="empty-state">No results yet</td></tr>
+        <tr><td colspan="8" class="empty-state">No results yet</td></tr>
       </tbody>
     </table>
   </div>
@@ -133,11 +138,51 @@
     <p id="os-text" class="explanation">—</p>
   </div>
 
-  <!-- ── Explanation ── -->
-  <div class="card">
-    <h2>Explanation</h2>
-    <p id="explanation-text" class="explanation">—</p>
-  </div>
+  <!-- ══════════════════════════════════════════════════════
+       Explanation — 3-tab panel
+       Replaces the old single explanation card.
+       ══════════════════════════════════════════════════════ -->
+  <div class="card" id="explanation-card">
+
+    <div class="exp-tab-bar">
+      <button class="exp-tab active" data-tab="overview"
+              onclick="switchExpTab('overview')">
+        📋 Overview
+      </button>
+      <button class="exp-tab" data-tab="port-details"
+              onclick="switchExpTab('port-details')">
+        🔌 Port Details
+        <span class="exp-tab-badge" id="exp-badge-portdetails"></span>
+      </button>
+      <button class="exp-tab" data-tab="cve-details"
+              onclick="switchExpTab('cve-details')">
+        🛡 CVE Details
+        <span class="exp-tab-badge exp-tab-badge-red" id="exp-badge-cvedetails"></span>
+      </button>
+    </div>
+
+    <!-- Tab: Overview -->
+    <div class="exp-tab-content active" id="exp-tab-overview">
+      <div id="exp-overview-body">
+        <p class="exp-placeholder">Run a scan to see the analysis.</p>
+      </div>
+    </div>
+
+    <!-- Tab: Port Details -->
+    <div class="exp-tab-content" id="exp-tab-port-details">
+      <div id="exp-portdetails-body">
+        <p class="exp-placeholder">No port details yet.</p>
+      </div>
+    </div>
+
+    <!-- Tab: CVE Details -->
+    <div class="exp-tab-content" id="exp-tab-cve-details">
+      <div id="exp-cvedetails-body">
+        <p class="exp-placeholder">No CVE details yet.</p>
+      </div>
+    </div>
+
+  </div><!-- /explanation-card -->
 
 </div><!-- /result-card -->
 
@@ -161,9 +206,9 @@
         <td>{{ s.total_open_ports }}</td>
         <td>
           <span class="label-badge label-{{
-            'safe' if s.risk_level == 'LOW' else
+            'safe'       if s.risk_level == 'LOW'             else
             'suspicious' if s.risk_level in ('MEDIUM','HIGH') else
-            'malicious' if s.risk_level == 'CRITICAL' else 'unknown'
+            'malicious'  if s.risk_level == 'CRITICAL'        else 'unknown'
           }}">{{ s.risk_level }}</span>
         </td>
         <td>{{ '%.1f'|format(s.scan_duration_s or 0) }}s</td>
@@ -182,6 +227,303 @@
     </tbody>
   </table>
 </div>
+
+<!-- ══════════════════════════════════════════════════════════
+     Scoped styles
+     ══════════════════════════════════════════════════════════ -->
+<style>
+/* ── CVE badge button ─────────────────────────────────────── */
+.cve-badge-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  background: var(--bg3);
+  color: var(--text-muted);
+  transition: background .15s, color .15s;
+  white-space: nowrap;
+}
+.cve-badge-btn:hover              { background: var(--blue-soft); color: var(--blue); }
+.cve-badge-btn.has-critical       { background:rgba(248,113,113,.15); color:var(--red);   border:1px solid rgba(248,113,113,.3); }
+.cve-badge-btn.has-critical:hover { background:rgba(248,113,113,.25); }
+.cve-badge-btn.has-high           { background:rgba(251,191,36,.12);  color:var(--amber); border:1px solid rgba(251,191,36,.25); }
+.cve-badge-btn.has-high:hover     { background:rgba(251,191,36,.22); }
+.cve-badge-btn.no-cve             { opacity:.4; cursor:default; pointer-events:none; }
+
+/* ── CVE expand row ───────────────────────────────────────── */
+.cve-expand-row td       { padding:0 !important; background:var(--bg2); }
+.cve-expand-inner        { padding:12px 16px; border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
+.cve-expand-inner h4     { margin:0 0 10px; font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.cve-item                { display:grid; grid-template-columns:130px 70px 90px 1fr; gap:8px 12px; align-items:start; padding:8px 0; border-bottom:1px solid rgba(42,38,80,.5); font-size:12px; }
+.cve-item:last-child     { border-bottom:none; }
+.cve-id                  { font-family:monospace; font-size:11px; color:var(--blue); font-weight:600; }
+.cve-cvss                { font-weight:700; font-size:13px; }
+.cve-cvss.cvss-critical  { color:var(--red); }
+.cve-cvss.cvss-high      { color:var(--amber); }
+.cve-cvss.cvss-medium    { color:#f59e0b; }
+.cve-cvss.cvss-low       { color:var(--green); }
+.cve-sev-pill            { display:inline-block; padding:2px 7px; border-radius:8px; font-size:10px; font-weight:700; text-transform:uppercase; }
+.sev-critical            { background:rgba(248,113,113,.18); color:var(--red); }
+.sev-high                { background:rgba(251,191,36,.15);  color:var(--amber); }
+.sev-medium              { background:rgba(124,106,247,.15); color:var(--blue); }
+.sev-low                 { background:rgba(74,222,128,.12);  color:var(--green); }
+.sev-unknown             { background:var(--bg3); color:var(--text-muted); }
+.cve-desc                { color:var(--text-muted); line-height:1.5; grid-column:1/-1; padding-top:2px; }
+.cve-error-note          { font-size:11px; color:var(--text-muted); font-style:italic; padding:4px 0; }
+.cve-none-note           { font-size:12px; color:var(--text-muted); padding:6px 0; }
+
+/* ── Explanation tab bar ──────────────────────────────────── */
+.exp-tab-bar {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin: -4px -4px 20px;
+}
+.exp-tab {
+  position: relative;
+  padding: 10px 18px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color .15s, border-color .15s;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.exp-tab:hover        { color: var(--text); }
+.exp-tab.active       { color: var(--blue); border-bottom-color: var(--blue); }
+
+.exp-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--bg3);
+  color: var(--text-muted);
+}
+.exp-tab-badge-red  { background:rgba(248,113,113,.2); color:var(--red); }
+
+.exp-tab-content    { display:none; animation: fadeTabIn .2s ease; }
+.exp-tab-content.active { display:block; }
+@keyframes fadeTabIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+
+.exp-placeholder    { color:var(--text-muted); font-style:italic; font-size:13px; }
+
+/* ── Overview tab ─────────────────────────────────────────── */
+.exp-risk-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+  border: 1px solid;
+}
+.exp-risk-banner.banner-low      { background:rgba(74,222,128,.07);  border-color:rgba(74,222,128,.25); }
+.exp-risk-banner.banner-medium   { background:rgba(251,191,36,.07);  border-color:rgba(251,191,36,.25); }
+.exp-risk-banner.banner-high     { background:rgba(251,191,36,.09);  border-color:rgba(251,191,36,.30); }
+.exp-risk-banner.banner-critical { background:rgba(248,113,113,.09); border-color:rgba(248,113,113,.30); }
+.exp-risk-banner.banner-unknown  { background:var(--bg3); border-color:var(--border); }
+
+.exp-banner-icon   { font-size:30px; line-height:1; flex-shrink:0; }
+.exp-banner-text h3 { margin:0 0 4px; font-size:15px; font-weight:700; }
+.exp-banner-text p  { margin:0; font-size:13px; color:var(--text-muted); line-height:1.55; }
+
+.exp-section        { margin-bottom:20px; }
+.exp-section:last-child { margin-bottom:0; }
+.exp-section-label  { font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--text-muted); margin-bottom:8px; font-weight:600; }
+.exp-narrative-para { font-size:13px; line-height:1.8; color:var(--text); margin:0 0 8px; }
+.exp-narrative-para:last-child { margin-bottom:0; }
+
+.exp-action-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.action-allow       { background:rgba(74,222,128,.12);  color:var(--green); border:1px solid rgba(74,222,128,.3); }
+.action-warn        { background:rgba(251,191,36,.12);  color:var(--amber); border:1px solid rgba(251,191,36,.3); }
+.action-quarantine  { background:rgba(248,113,113,.12); color:var(--red);   border:1px solid rgba(248,113,113,.3); }
+.action-investigate { background:rgba(124,106,247,.12); color:var(--blue);  border:1px solid rgba(124,106,247,.3); }
+
+.exp-divider        { border:none; border-top:1px solid var(--border); margin:16px 0; }
+
+/* ── Port Details tab ─────────────────────────────────────── */
+.port-detail-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.port-detail-card:last-child { margin-bottom:0; }
+
+.port-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 16px;
+  background: var(--bg3);
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s;
+}
+.port-detail-header:hover { background: rgba(124,106,247,.08); }
+
+.port-num-badge    { font-family:monospace; font-size:14px; font-weight:700; color:var(--blue); min-width:52px; }
+.port-proto-tag    { font-size:10px; color:var(--text-muted); background:var(--bg2); padding:1px 6px; border-radius:4px; text-transform:uppercase; font-weight:600; }
+.port-service-label { font-size:13px; font-weight:600; color:var(--text); flex:1; }
+.port-risk-chip {
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.chip-critical { background:rgba(248,113,113,.18); color:var(--red); }
+.chip-high     { background:rgba(251,191,36,.15);  color:var(--amber); }
+.chip-medium   { background:rgba(124,106,247,.15); color:var(--blue); }
+.chip-info, .chip-low { background:var(--bg2); color:var(--text-muted); border:1px solid var(--border); }
+.port-chevron  { color:var(--text-muted); font-size:11px; transition:transform .2s; margin-left:4px; }
+.port-chevron.chevron-open { transform:rotate(90deg); }
+
+.port-detail-body {
+  display: none;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg2);
+}
+.port-detail-body.body-open { display:block; }
+
+.port-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.port-meta-item           { background:var(--bg3); border-radius:6px; padding:8px 12px; }
+.port-meta-item .meta-lbl { font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; margin-bottom:3px; }
+.port-meta-item .meta-val { font-size:12px; font-weight:600; color:var(--text); font-family:monospace; word-break:break-all; }
+
+.port-why-box {
+  border-left: 3px solid var(--blue);
+  border-radius: 0 6px 6px 0;
+  background: rgba(124,106,247,.06);
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text);
+}
+.port-why-box.why-critical { border-left-color:var(--red);   background:rgba(248,113,113,.05); }
+.port-why-box.why-high     { border-left-color:var(--amber); background:rgba(251,191,36,.05); }
+.port-why-box.why-medium   { border-left-color:var(--blue);  }
+
+.port-rec {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.65;
+  align-items: flex-start;
+}
+.port-rec-icon { flex-shrink:0; }
+
+.port-safe-note {
+  text-align:center;
+  color:var(--text-muted);
+  font-size:13px;
+  padding:28px 0;
+}
+
+/* ── CVE Details tab ──────────────────────────────────────── */
+.cve-detail-port-group    { margin-bottom:24px; }
+.cve-detail-port-group:last-child { margin-bottom:0; }
+
+.cve-port-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.cve-port-group-header .port-num-badge { font-size:13px; }
+.cve-port-group-svc  { font-size:13px; color:var(--text-muted); }
+.cve-port-group-count { margin-left:auto; font-size:12px; color:var(--text-muted); }
+
+.cve-full-card {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 10px;
+}
+.cve-full-card.card-critical { border-left:3px solid var(--red); }
+.cve-full-card.card-high     { border-left:3px solid var(--amber); }
+.cve-full-card.card-medium   { border-left:3px solid var(--blue); }
+.cve-full-card:last-child    { margin-bottom:0; }
+
+.cve-full-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.cve-full-id   { font-family:monospace; font-size:13px; font-weight:700; color:var(--blue); }
+.cve-full-cvss { font-size:16px; font-weight:800; }
+.cvss-critical { color:var(--red); }
+.cvss-high     { color:var(--amber); }
+.cvss-medium   { color:#f59e0b; }
+.cvss-low      { color:var(--green); }
+
+.cve-full-desc {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+.cve-plain-english {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-muted);
+  background: var(--bg2);
+  border-radius: 6px;
+  padding: 9px 13px;
+  border-left: 3px solid var(--border);
+}
+.cve-plain-english.note-critical { border-left-color:var(--red); }
+.cve-plain-english.note-high     { border-left-color:var(--amber); }
+
+.cve-no-results {
+  text-align: center;
+  padding: 36px 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.cve-no-results .no-icon { font-size:36px; margin-bottom:10px; }
+</style>
+
 {% endblock %}
 
 {% block scripts %}

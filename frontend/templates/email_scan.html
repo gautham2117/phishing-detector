@@ -14,7 +14,6 @@
 <div class="card">
   <h2>Submit email for analysis</h2>
 
-  <!-- Tab switcher: Upload .eml vs Paste raw -->
   <div class="tab-bar">
     <button class="tab active" id="tab-upload" onclick="switchTab('upload')">
       Upload .eml file
@@ -24,7 +23,6 @@
     </button>
   </div>
 
-  <!-- Upload .eml tab -->
   <div id="panel-upload">
     <div class="upload-zone" id="drop-zone">
       <p>Drag &amp; drop a <code>.eml</code> file here, or</p>
@@ -35,7 +33,6 @@
     </div>
   </div>
 
-  <!-- Paste raw email tab (hidden by default) -->
   <div id="panel-paste" style="display:none">
     <textarea id="raw-email-input" rows="12"
               placeholder="Paste the full raw email here (including headers like From:, To:, Subject:, Received:...)">
@@ -46,7 +43,7 @@
   </div>
 </div>
 
-<!-- ── Scan result display (fills in after scan) ── -->
+<!-- ── Scan result display ── -->
 <div class="card" id="result-card" style="display:none">
   <div class="result-header">
     <h2>Scan result</h2>
@@ -65,17 +62,65 @@
   <!-- Recommended action -->
   <div class="action-pill" id="action-pill">—</div>
 
-  <!-- DistilBERT result card -->
-  <div class="module-card">
-    <h3>DistilBERT classification</h3>
-    <div class="model-result" id="distilbert-result">—</div>
-    <div class="confidence-bar-track">
-      <div class="confidence-bar-fill" id="confidence-bar" style="width:0%"></div>
+  <!-- ── DistilBERT classification — full explanation panel ── -->
+  <div class="module-card distil-panel">
+
+    <!-- Panel header: title + verdict badge side by side -->
+    <div class="distil-panel-header">
+      <div class="distil-panel-title-group">
+        <h3 style="margin:0">DistilBERT classification</h3>
+        <p class="distil-panel-subtitle">
+          A fine-tuned transformer model trained on thousands of real phishing
+          and legitimate emails. It reads the full email body and assigns a
+          probability that the message is a phishing attempt.
+        </p>
+      </div>
+      <span class="distil-verdict-badge" id="distil-verdict-badge">—</span>
     </div>
-    <span class="confidence-label" id="confidence-label">0% confidence</span>
+
+    <!-- Confidence meter -->
+    <div class="distil-meter-block">
+      <div class="distil-meter-labels">
+        <span class="distil-meter-left" id="distil-meter-left">Phishing confidence</span>
+        <span class="distil-meter-pct"  id="distil-conf-pct">—</span>
+      </div>
+      <div class="confidence-bar-track distil-bar-track">
+        <div class="confidence-bar-fill" id="confidence-bar" style="width:0%"></div>
+        <!-- Threshold tick marks -->
+        <span class="distil-tick" style="left:60%" title="Moderate threshold (60%)"></span>
+        <span class="distil-tick" style="left:80%" title="High threshold (80%)"></span>
+        <span class="distil-tick" style="left:95%" title="Very high threshold (95%)"></span>
+      </div>
+      <div class="distil-tick-labels">
+        <span style="left:60%">60%</span>
+        <span style="left:80%">80%</span>
+        <span style="left:95%">95%</span>
+      </div>
+    </div>
+
+    <!-- What this score means — the core explanation -->
+    <div class="distil-explanation-block" id="distil-explanation-block">
+      <!-- filled by renderDistilbertDetail() -->
+    </div>
+
+    <!-- Score → risk contribution breakdown -->
+    <div class="distil-breakdown-grid" id="distil-breakdown-grid">
+      <!-- filled by renderDistilbertDetail() -->
+    </div>
+
+    <!-- What to do next — actionable guidance -->
+    <div class="distil-next-steps" id="distil-next-steps">
+      <!-- filled by renderDistilbertDetail() -->
+    </div>
+
+    <!-- Model attribution footer -->
+    <div class="distil-footer">
+      <span class="distil-footer-key">Model</span>
+      <code class="distil-footer-val" id="distil-model-name">—</code>
+    </div>
   </div>
 
-  <!-- Auth results row -->
+  <!-- ── Email authentication ── -->
   <div class="module-card">
     <h3>Email authentication</h3>
     <div class="auth-row">
@@ -83,9 +128,57 @@
       <div class="auth-pill" id="dkim-pill">DKIM —</div>
       <div class="auth-pill" id="dmarc-pill">DMARC —</div>
     </div>
+
+    <!-- ── DNSBL sender IP check ── NEW ── -->
+    <div class="dnsbl-block" id="dnsbl-block" style="display:none">
+      <div class="dnsbl-header-row">
+        <span class="dnsbl-label">DNSBL / Blocklist check</span>
+        <span class="dnsbl-ip" id="dnsbl-ip"></span>
+        <span class="dnsbl-status-badge" id="dnsbl-status-badge">—</span>
+      </div>
+      <div class="dnsbl-zones-row" id="dnsbl-zones-row" style="display:none">
+        <span class="dnsbl-zones-label">Listed on:</span>
+        <span id="dnsbl-zones-list"></span>
+      </div>
+      <p class="dnsbl-note" id="dnsbl-note"></p>
+    </div>
   </div>
 
-  <!-- Header anomalies list -->
+  <!-- ── BEC display name spoofing ── NEW ── -->
+  <div class="module-card" id="bec-card" style="display:none">
+    <h3>
+      BEC display name spoofing
+      <span class="bec-status-badge" id="bec-status-badge">—</span>
+    </h3>
+
+    <div class="bec-meta-row">
+      <div class="bec-meta-item">
+        <span class="bec-meta-key">Display name</span>
+        <span class="bec-meta-val" id="bec-display-name">—</span>
+      </div>
+      <div class="bec-meta-item">
+        <span class="bec-meta-key">From domain</span>
+        <span class="bec-meta-val" id="bec-from-domain">—</span>
+      </div>
+      <div class="bec-meta-item" id="bec-replyto-item" style="display:none">
+        <span class="bec-meta-key">Reply-To domain</span>
+        <span class="bec-meta-val" id="bec-replyto-domain">—</span>
+      </div>
+      <div class="bec-meta-item" id="bec-kw-item" style="display:none">
+        <span class="bec-meta-key">Executive keyword</span>
+        <span class="bec-meta-val bec-kw-highlight" id="bec-exec-kw">—</span>
+      </div>
+    </div>
+
+    <ul class="bec-signals-list" id="bec-signals-list" style="display:none"></ul>
+
+    <p class="bec-clean-note" id="bec-clean-note" style="display:none">
+      No BEC spoofing indicators detected — the display name and sending
+      domain appear consistent.
+    </p>
+  </div>
+
+  <!-- ── Header anomalies ── -->
   <div class="module-card">
     <h3>Header anomalies <span class="count-badge" id="anomaly-count">0</span></h3>
     <ul class="anomaly-list" id="anomaly-list">
@@ -93,7 +186,7 @@
     </ul>
   </div>
 
-  <!-- Extracted URLs table -->
+  <!-- ── Extracted URLs table ── -->
   <div class="module-card">
     <h3>Extracted URLs <span class="count-badge" id="url-count">0</span></h3>
     <table class="data-table" id="url-table">
@@ -111,20 +204,20 @@
     </table>
   </div>
 
-  <!-- Explanation -->
+  <!-- ── Explanation ── -->
   <div class="module-card">
     <h3>Explanation</h3>
     <p id="explanation-text" class="explanation">—</p>
   </div>
 </div>
 
-<!-- ── Spinner (shown while scanning) ── -->
+<!-- ── Spinner ── -->
 <div class="spinner-overlay" id="spinner" style="display:none">
   <div class="spinner"></div>
   <p>Scanning with DistilBERT...</p>
 </div>
 
-<!-- ── Recent scans history table ── -->
+<!-- ── Recent scans history ── -->
 <div class="card">
   <h2>Recent scans</h2>
   <table class="data-table">
@@ -161,4 +254,325 @@
 
 {% block scripts %}
 <script src="/static/js/scan_ui.js"></script>
+
+<style>
+/* ── DistilBERT full explanation panel ────────────────── */
+.distil-panel { padding: 18px 20px !important; }
+
+.distil-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.distil-panel-title-group { flex: 1; }
+.distil-panel-subtitle {
+  font-size: .78rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin: 5px 0 0;
+}
+
+/* Verdict badge — top-right of panel header */
+.distil-verdict-badge {
+  flex-shrink: 0;
+  font-weight: 700;
+  font-size: .95rem;
+  padding: 5px 16px;
+  border-radius: 20px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  white-space: nowrap;
+  align-self: flex-start;
+}
+.distil-verdict-badge.dvb-phishing { background: rgba(248,113,113,.18); border-color: var(--red);   color: var(--red);   }
+.distil-verdict-badge.dvb-safe     { background: rgba(74,222,128,.15);  border-color: var(--green); color: var(--green); }
+.distil-verdict-badge.dvb-unknown  { color: var(--text-muted); }
+
+/* Confidence meter */
+.distil-meter-block { margin-bottom: 16px; }
+.distil-meter-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: .78rem;
+  margin-bottom: 5px;
+}
+.distil-meter-left { color: var(--text-muted); }
+.distil-meter-pct  { font-weight: 700; color: var(--text); font-size: .9rem; }
+
+.distil-bar-track {
+  position: relative;
+  height: 10px !important;
+  border-radius: 6px;
+}
+.distil-tick {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 16px;
+  background: var(--bg2);
+  border-radius: 1px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 2;
+}
+.distil-tick-labels {
+  position: relative;
+  height: 16px;
+  font-size: .68rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.distil-tick-labels span {
+  position: absolute;
+  transform: translateX(-50%);
+}
+
+/* What this score means */
+.distil-explanation-block {
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  font-size: .85rem;
+  line-height: 1.7;
+  color: var(--text);
+  border: 1px solid var(--border);
+  background: var(--bg3);
+}
+.distil-explanation-block.expl-phishing {
+  border-color: rgba(248,113,113,.4);
+  background: rgba(248,113,113,.06);
+}
+.distil-explanation-block.expl-safe {
+  border-color: rgba(74,222,128,.35);
+  background: rgba(74,222,128,.05);
+}
+.distil-explanation-block .expl-headline {
+  display: block;
+  font-weight: 700;
+  font-size: .92rem;
+  margin-bottom: 6px;
+}
+.distil-explanation-block .expl-headline.hl-phishing { color: var(--red);   }
+.distil-explanation-block .expl-headline.hl-safe     { color: var(--green); }
+.distil-explanation-block .expl-headline.hl-unknown  { color: var(--text-muted); }
+
+/* Score → risk breakdown grid */
+.distil-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.distil-breakdown-cell {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.distil-breakdown-key {
+  font-size: .7rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-muted);
+}
+.distil-breakdown-val {
+  font-size: .88rem;
+  font-weight: 700;
+  color: var(--text);
+  font-family: monospace;
+}
+.distil-breakdown-val.val-red    { color: var(--red);   }
+.distil-breakdown-val.val-green  { color: var(--green); }
+.distil-breakdown-val.val-amber  { color: var(--amber); }
+.distil-breakdown-val.val-muted  { color: var(--text-muted); }
+
+/* Next steps */
+.distil-next-steps {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+.distil-next-steps-title {
+  font-size: .75rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  display: block;
+}
+.distil-next-steps ol {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.distil-next-steps li {
+  font-size: .83rem;
+  color: var(--text);
+  line-height: 1.5;
+}
+.distil-next-steps li strong { color: var(--blue); }
+
+/* Footer */
+.distil-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: .75rem;
+}
+.distil-footer-key  { color: var(--text-muted); }
+.distil-footer-val  { color: var(--text-muted); font-size: .72rem; }
+
+/* ── DNSBL block ───────────────────────────────────────── */
+.dnsbl-block {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--bg3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.dnsbl-header-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.dnsbl-label {
+  font-size: .8rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.dnsbl-ip {
+  font-family: monospace;
+  font-size: .82rem;
+  color: var(--text);
+  background: var(--bg2);
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.dnsbl-status-badge {
+  margin-left: auto;
+  font-size: .8rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+}
+.dnsbl-status-badge.dnsbl-listed  { background: rgba(248,113,113,.15); border-color: var(--red);   color: var(--red);   }
+.dnsbl-status-badge.dnsbl-clean   { background: rgba(74,222,128,.15);  border-color: var(--green); color: var(--green); }
+.dnsbl-status-badge.dnsbl-unknown { background: var(--bg3); color: var(--text-muted); }
+.dnsbl-zones-row {
+  margin: 6px 0 4px;
+  font-size: .8rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.dnsbl-zones-label { color: var(--text-muted); flex-shrink: 0; }
+.dnsbl-zone-pill {
+  background: rgba(248,113,113,.12);
+  border: 1px solid var(--red);
+  color: var(--red);
+  border-radius: 20px;
+  padding: 2px 8px;
+  font-size: .75rem;
+  font-family: monospace;
+}
+.dnsbl-note {
+  font-size: .78rem;
+  color: var(--text-muted);
+  margin: 4px 0 0;
+}
+
+/* ── BEC card ──────────────────────────────────────────── */
+.bec-status-badge {
+  font-size: .78rem;
+  font-weight: 700;
+  padding: 2px 9px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  margin-left: 10px;
+  vertical-align: middle;
+}
+.bec-status-badge.bec-suspect { background: rgba(248,113,113,.15); border-color: var(--red);   color: var(--red);   }
+.bec-status-badge.bec-clean   { background: rgba(74,222,128,.15);  border-color: var(--green); color: var(--green); }
+.bec-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0;
+}
+.bec-meta-item {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  min-width: 140px;
+}
+.bec-meta-key {
+  font-size: .7rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+.bec-meta-val {
+  font-size: .85rem;
+  color: var(--text);
+  font-family: monospace;
+  word-break: break-all;
+}
+.bec-kw-highlight {
+  color: var(--amber);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.bec-signals-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.bec-signal-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: rgba(248,113,113,.08);
+  border: 1px solid rgba(248,113,113,.25);
+  border-radius: 6px;
+  padding: 7px 12px;
+  font-size: .83rem;
+  color: var(--text);
+}
+.bec-signal-icon {
+  color: var(--red);
+  font-size: .9rem;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.bec-clean-note {
+  font-size: .82rem;
+  color: var(--text-muted);
+  margin: 6px 0 0;
+}
+</style>
 {% endblock %}

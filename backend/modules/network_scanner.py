@@ -24,8 +24,9 @@
 #   3. Parses every open port: service, version, banner
 #   4. Classifies each port against a dangerous port registry
 #   5. Detects exposed admin panels and legacy services
-#   6. Builds a structured result + risk assessment
-#   7. Returns a NetworkScanResult dict ready for DB storage
+#   6. Looks up CVEs for detected services via NVD API v2
+#   7. Builds a structured result + risk assessment
+#   8. Returns a NetworkScanResult dict ready for DB storage
 
 import os
 import json
@@ -33,12 +34,21 @@ import time
 import socket
 import logging
 import ipaddress
+import urllib.request
+import urllib.parse
 from datetime import datetime
 from typing import Optional
+from collections import defaultdict
 
 import nmap   # pip install python-nmap (wraps the nmap binary)
 
 logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CVE cache  (module-level, keyed by "product_version", TTL 30 min)
+# ─────────────────────────────────────────────────────────────────────────────
+_cve_cache: dict = {}          # key → {"data": dict, "ts": float}
+_CVE_CACHE_TTL  = 30 * 60     # 30 minutes in seconds
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Authorization allowlist
@@ -120,7 +130,6 @@ DANGEROUS_PORTS = {
     # ── Phishing infrastructure specific ──────────────────────────────────
     4444: ("Metasploit",      "CRITICAL", "Common Metasploit/reverse shell port"),
     4445: ("Upnotifyp/shell", "HIGH",     "Common C2/reverse shell port"),
-    8888: ("C2/Jupyter",      "HIGH",     "Common C2 or Jupyter port"),
     1080: ("SOCKS proxy",     "HIGH",     "SOCKS proxy — anonymization or C2"),
     3128: ("Squid proxy",     "MEDIUM",   "Squid HTTP proxy — check for open proxy"),
 }
@@ -133,6 +142,183 @@ DANGEROUS_SERVICE_KEYWORDS = [
     "telnet", "ftp", "rpc", "rsh", "rlogin", "rexec",
     "vnc", "netbios", "smb", "msrpc", "snmp"
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CVE lookup (NVD API v2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _lookup_cves_for_service(
+    service_product: str,
+    service_version: str,
+    cpe: str = "",
+) -> dict:
+    """
+    Query the NVD (National Vulnerability Database) API v2 for CVEs
+    matching a detected service.
+
+    Strategy (in order):
+      1. If both product AND version are present → search "product version"
+      2. If only product is present → search "product" alone
+      3. If NVD returns 0 results and a CPE string is available →
+         extract vendor:product from the CPE and retry once
+
+    This means the lookup now works even when nmap's -sV only returns a
+    product name without a specific version (the common case for standard
+    top-100 scans against hardened hosts like scanme.nmap.org).
+
+    Results are tagged with version_matched=True/False so the UI can show
+    a note when results are product-level rather than version-exact.
+
+    Returns:
+        {
+            "cves":           list[dict],
+            "critical_count": int,
+            "high_count":     int,
+            "highest_cvss":   float,
+            "version_matched": bool,   # True = product+version match, False = product only
+            "search_term":    str,     # what was actually sent to NVD
+            "error":          str | None,
+        }
+
+    Never raises — all errors are caught and returned in the "error" field.
+    """
+    _empty = {
+        "cves": [], "critical_count": 0, "high_count": 0,
+        "highest_cvss": 0.0, "version_matched": False,
+        "search_term": "", "error": None,
+    }
+
+    # Need at least a product name to proceed
+    if not service_product:
+        return _empty
+
+    has_version     = bool(service_version and service_version.strip())
+    version_matched = has_version
+
+    # Build the primary search keyword
+    if has_version:
+        primary_keyword = f"{service_product} {service_version}".strip()
+    else:
+        primary_keyword = service_product.strip()
+
+    cache_key = primary_keyword.lower()
+
+    # Return cached result if still fresh
+    cached = _cve_cache.get(cache_key)
+    if cached and (time.time() - cached["ts"]) < _CVE_CACHE_TTL:
+        return cached["data"]
+
+    def _nvd_fetch(keyword: str) -> tuple[list, Optional[str]]:
+        """
+        Hit the NVD API for a keyword string.
+        Returns (vulnerabilities_list, error_string_or_None).
+        """
+        try:
+            encoded = urllib.parse.quote(keyword)
+            url = (
+                f"https://services.nvd.nist.gov/rest/json/cves/2.0"
+                f"?keywordSearch={encoded}&resultsPerPage=5"
+            )
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "MahoragaSentinel/1.0 CVELookup"},
+            )
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                if resp.status == 429:
+                    return [], "NVD rate limited — try again shortly"
+                raw  = resp.read()
+                data = json.loads(raw)
+                return data.get("vulnerabilities", []), None
+        except Exception as exc:
+            return [], str(exc)[:120]
+
+    # ── Primary fetch ──────────────────────────────────────────────────────
+    vulns, err = _nvd_fetch(primary_keyword)
+    used_keyword = primary_keyword
+
+    # ── CPE fallback: if 0 results and CPE available, retry ───────────────
+    if not vulns and cpe and not err:
+        # CPE format: cpe:/type:vendor:product[:version[:...]]
+        # e.g. cpe:/a:openbsd:openssh  →  keyword "openbsd openssh"
+        cpe_clean = cpe.replace("cpe:/", "").replace("cpe:2.3:", "")
+        parts     = [p for p in cpe_clean.split(":") if p and p not in ("a", "o", "h", "*")]
+        if len(parts) >= 2:
+            cpe_keyword  = " ".join(parts[:2])  # vendor + product
+            vulns, err2  = _nvd_fetch(cpe_keyword)
+            if vulns:
+                used_keyword    = cpe_keyword
+                version_matched = False          # CPE fallback = product-level only
+            elif not err:
+                err = err2
+
+    if err and not vulns:
+        logger.debug("CVE lookup failed for %s: %s", cache_key, err)
+        result = {**_empty, "error": err, "search_term": used_keyword}
+        _cve_cache[cache_key] = {"data": result, "ts": time.time()}
+        return result
+
+    # ── Parse CVE entries ──────────────────────────────────────────────────
+    cves           = []
+    critical_count = 0
+    high_count     = 0
+    highest_cvss   = 0.0
+
+    for item in vulns:
+        cve_obj = item.get("cve", {})
+        cve_id  = cve_obj.get("id", "")
+
+        # Description — prefer English
+        desc = ""
+        for d in cve_obj.get("descriptions", []):
+            if d.get("lang") == "en":
+                desc = d.get("value", "")[:200]
+                break
+
+        # CVSS v3 score (fall back to v2 if absent)
+        cvss_score = 0.0
+        severity   = "UNKNOWN"
+        metrics    = cve_obj.get("metrics", {})
+
+        cvss3_list = metrics.get("cvssMetricV31", []) or metrics.get("cvssMetricV30", [])
+        if cvss3_list:
+            cvss_data  = cvss3_list[0].get("cvssData", {})
+            cvss_score = float(cvss_data.get("baseScore", 0.0))
+            severity   = cvss_data.get("baseSeverity", "UNKNOWN").upper()
+        else:
+            cvss2_list = metrics.get("cvssMetricV2", [])
+            if cvss2_list:
+                cvss_score = float(
+                    cvss2_list[0].get("cvssData", {}).get("baseScore", 0.0)
+                )
+                severity = "HIGH" if cvss_score >= 7.0 else "MEDIUM"
+
+        if cvss_score > highest_cvss:
+            highest_cvss = cvss_score
+        if severity == "CRITICAL":
+            critical_count += 1
+        elif severity == "HIGH":
+            high_count += 1
+
+        cves.append({
+            "cve_id":      cve_id,
+            "description": desc,
+            "cvss_score":  cvss_score,
+            "severity":    severity,
+        })
+
+    result = {
+        "cves":            cves,
+        "critical_count":  critical_count,
+        "high_count":      high_count,
+        "highest_cvss":    highest_cvss,
+        "version_matched": version_matched,
+        "search_term":     used_keyword,
+        "error":           None,
+    }
+
+    _cve_cache[cache_key] = {"data": result, "ts": time.time()}
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -284,11 +470,6 @@ def _check_authorization(target: str, consent_confirmed: bool) -> tuple[bool, st
     if clean_target in AUTHORIZED_DEMO_TARGETS:
         return True, "demo_target_allowlisted"
 
-    # --------------------------------------------------------------
-    # FIX 3: More helpful error messages
-    # Tell the user exactly what's missing
-    # --------------------------------------------------------------
-
     # Layer 2: Check for the opt-in environment variable
     scan_authorized_env = os.environ.get("SCAN_AUTHORIZED", "0")
     if scan_authorized_env != "1":
@@ -312,8 +493,6 @@ def _check_authorization(target: str, consent_confirmed: bool) -> tuple[bool, st
 
     # All layers passed
     return True, "authorized_via_env_and_consent"
-
-# [Rest of the file remains unchanged]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -374,24 +553,18 @@ def _build_nmap_args(scan_type: str) -> str:
       Requires root/administrator privileges. If running as a normal
       user, nmap will skip OS detection gracefully — not a fatal error.
     """
-    base_flags = "-sV --open -Pn"
-
     profiles = {
         # Quick: just the 20 most important ports, no version detection
-        # Use this for a fast first pass on many domains
-        "quick": f"--top-ports 20 -T4 -Pn --open",
+        "quick":   "--top-ports 20 -T4 -Pn --open",
 
         # Top 100: standard recon profile — good balance of speed and coverage
-        # Service detection (-sV) gives us application names and versions
-        "top100": f"--top-ports 100 -sV -T4 --open -Pn",
+        "top100":  "--top-ports 100 -sV -T4 --open -Pn",
 
         # Top 1000: comprehensive scan — covers most real-world services
-        # -sC adds default NSE scripts (safe, informational)
-        "top1000": f"--top-ports 1000 -sV -sC -T3 --open -Pn",
+        "top1000": "--top-ports 1000 -sV -sC -T3 --open -Pn",
 
         # Full: all 65535 ports — slow but complete
-        # Only use on hosts you own, with patience
-        "full": f"-p- -sV -sC -T3 --open -Pn",
+        "full":    "-p- -sV -sC -T3 --open -Pn",
     }
 
     return profiles.get(scan_type, profiles["top100"])
@@ -411,38 +584,16 @@ def _run_nmap(target: str, nmap_args: str) -> tuple[dict, str, Optional[str]]:
 
     Returns:
         (scan_result_dict, nmap_version_string, error_message_or_None)
-
-    The scan_result_dict has the structure:
-        {
-          "hostname": {
-            "tcp": {
-              port_number: {
-                "state": "open",
-                "name": "http",
-                "product": "Apache httpd",
-                "version": "2.4.41",
-                "extrainfo": "...",
-                "cpe": "cpe:/a:apache:http_server:2.4.41"
-              }
-            }
-          }
-        }
     """
     try:
         nm = nmap.PortScanner()
 
-        # nmap() takes: hosts, ports (None = use --top-ports from args), arguments
-        # We pass target as host, None for ports (controlled by --top-ports in args),
-        # and our built argument string.
         nm.scan(hosts=target, ports=None, arguments=nmap_args)
 
         nmap_version = nm.nmap_version()
         version_str  = f"{nmap_version[0]}.{nmap_version[1]}" if nmap_version else "unknown"
 
-        # nm[target] is a dict of protocols → {port → port_info}
-        # If the host wasn't up or had no results, nm[target] is empty
         if target not in nm.all_hosts():
-            # Try the resolved IP as the key (nmap sometimes uses IP not hostname)
             hosts = nm.all_hosts()
             if hosts:
                 result = nm[hosts[0]]
@@ -454,12 +605,11 @@ def _run_nmap(target: str, nmap_args: str) -> tuple[dict, str, Optional[str]]:
         return dict(result), version_str, None
 
     except nmap.PortScannerError as e:
-        # Common causes: nmap not installed, insufficient privileges for -sS
         error_msg = str(e)
         if "nmap programme was not found" in error_msg.lower():
             return {}, "", "nmap binary not found. Install nmap: sudo apt install nmap"
         if "requires root" in error_msg.lower() or "permission" in error_msg.lower():
-            return {}, "", "nmap requires root/admin for SYN scan. Try running with sudo, or the scan_type will auto-downgrade."
+            return {}, "", "nmap requires root/admin for SYN scan. Try running with sudo."
         return {}, "", f"Nmap error: {error_msg[:200]}"
 
     except Exception as e:
@@ -468,7 +618,7 @@ def _run_nmap(target: str, nmap_args: str) -> tuple[dict, str, Optional[str]]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Port result parsing
+# Port result parsing  ← UPDATED: CVE lookup injected for dangerous ports
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_ports(nmap_result: dict, target: str, ip: str) -> list[dict]:
@@ -477,53 +627,52 @@ def _parse_ports(nmap_result: dict, target: str, ip: str) -> list[dict]:
 
     For each open port we extract:
       - port number, protocol, state
-      - service name (http, ssh, ftp, etc.)
-      - product and version (Apache 2.4.41, OpenSSH 8.2, etc.)
-      - extra info / banner text
-      - CPE identifier (standard software ID format)
+      - service name, product, version, extra info, CPE
       - is_dangerous + danger_reason from our registry
-
-    nmap_result structure (from python-nmap):
-      {
-        "tcp": { 22: {"state":"open","name":"ssh","product":"OpenSSH","version":"8.2",...} },
-        "udp": { 161: {"state":"open","name":"snmp",...} },
-        "osmatch": [...],
-        ...
-      }
+      - cve_data: CVE lookup result for dangerous ports with version info
     """
     ports = []
 
-    # Iterate over protocols (usually just "tcp", sometimes "udp")
     for protocol in ("tcp", "udp"):
         proto_data = nmap_result.get(protocol, {})
 
         for port_num, port_info in proto_data.items():
             state = port_info.get("state", "unknown")
 
-            # We only care about open ports for threat assessment
-            # (filtered/closed ports aren't useful here)
             if state not in ("open", "open|filtered"):
                 continue
 
-            service_name    = port_info.get("name", "")
-            service_product = port_info.get("product", "")
-            service_version = port_info.get("version", "")
+            service_name    = port_info.get("name",      "")
+            service_product = port_info.get("product",   "")
+            service_version = port_info.get("version",   "")
             service_extra   = port_info.get("extrainfo", "")
-            cpe             = port_info.get("cpe", "")
+            cpe             = port_info.get("cpe",       "")
 
             # Check against our dangerous port registry
-            is_dangerous   = False
-            danger_reason  = ""
+            is_dangerous  = False
+            danger_reason = ""
 
             if port_num in DANGEROUS_PORTS:
                 _, danger_level, reason = DANGEROUS_PORTS[port_num]
                 is_dangerous  = True
                 danger_reason = f"[{danger_level}] {reason}"
-
-            # Also flag if service name matches dangerous keywords
             elif any(kw in service_name.lower() for kw in DANGEROUS_SERVICE_KEYWORDS):
                 is_dangerous  = True
                 danger_reason = f"Service '{service_name}' is inherently insecure"
+
+            # ── CVE lookup for dangerous ports ────────────────────────────
+            # Fires when a product name is detected (version optional).
+            # CPE is passed as a fallback for when product-only search
+            # returns 0 results (e.g. scanme.nmap.org standard scan).
+            cve_data = {
+                "cves": [], "critical_count": 0, "high_count": 0,
+                "highest_cvss": 0.0, "version_matched": False,
+                "search_term": "", "error": None,
+            }
+            if is_dangerous and service_product:
+                cve_data = _lookup_cves_for_service(
+                    service_product, service_version, cpe=cpe
+                )
 
             ports.append({
                 "port":            port_num,
@@ -537,7 +686,8 @@ def _parse_ports(nmap_result: dict, target: str, ip: str) -> list[dict]:
                 "is_dangerous":    is_dangerous,
                 "danger_reason":   danger_reason,
                 "risk_level":      DANGEROUS_PORTS.get(port_num, ("", "INFO", ""))[1]
-                                   if port_num in DANGEROUS_PORTS else "INFO"
+                                   if port_num in DANGEROUS_PORTS else "INFO",
+                "cve_data":        cve_data,
             })
 
     # Sort: dangerous ports first, then by port number
@@ -553,13 +703,6 @@ def _detect_admin_panels(ports: list[dict]) -> list[dict]:
     """
     Identify ports and services that likely expose admin panels or
     management interfaces.
-
-    Detection signals:
-      1. Port is in the ADMIN_PANEL_PORTS set
-      2. Service product name contains "admin", "management", "panel"
-      3. Service extra info mentions login forms or console keywords
-
-    Returns a list of admin exposure dicts, one per suspected panel.
     """
     exposures = []
     panel_keywords = [
@@ -574,7 +717,6 @@ def _detect_admin_panels(ports: list[dict]) -> list[dict]:
 
         is_admin_port = p["port"] in ADMIN_PANEL_PORTS
 
-        # Check service product and extra info for admin keywords
         combined = (
             f"{p['service_name']} {p['service_product']} {p['service_extra']}"
         ).lower()
@@ -605,18 +747,15 @@ def _detect_admin_panels(ports: list[dict]) -> list[dict]:
 def _extract_os_guess(nmap_result: dict, target: str) -> Optional[str]:
     """
     Extract the best OS guess from nmap's OS detection results.
-    Returns None if OS detection wasn't run or produced no results
-    (common when not running as root).
+    Returns None if OS detection wasn't run or produced no results.
     """
     try:
         os_matches = nmap_result.get("osmatch", [])
         if not os_matches:
             return None
 
-        # osmatch is a list of dicts sorted by accuracy (highest first)
-        # Each has: name, accuracy, osclass list
-        best = os_matches[0]
-        name     = best.get("name", "")
+        best     = os_matches[0]
+        name     = best.get("name",     "")
         accuracy = best.get("accuracy", "")
         return f"{name} (accuracy: {accuracy}%)" if name else None
 
@@ -625,20 +764,20 @@ def _extract_os_guess(nmap_result: dict, target: str) -> Optional[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Risk assessment
+# Risk assessment  ← UPDATED: escalates to CRITICAL if CVSS ≥ 9.0 found
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _assess_risk(ports: list[dict], admin_exposures: list[dict]) -> tuple[str, list]:
     """
-    Assign an overall risk level and build a list of risk flag strings
-    based on what the port scan found.
+    Assign an overall risk level and build a list of risk flag strings.
 
     Risk level escalation:
       LOW:      No dangerous ports, no admin panels
-      MEDIUM:   1–2 medium-risk ports (e.g. open SSH, HTTP-alt)
+      MEDIUM:   1–2 medium-risk ports
       HIGH:     Critical database or remote access ports open
-      CRITICAL: Direct RCE-risk ports (Telnet, unauthenticated Docker,
-                public database ports, Metasploit listener ports)
+      CRITICAL: Direct RCE-risk ports, unauthenticated Docker,
+                public database ports, Metasploit listener ports,
+                OR any port has a CVE with CVSS ≥ 9.0
 
     Returns: (risk_level: str, flags: list[str])
     """
@@ -653,7 +792,6 @@ def _assess_risk(ports: list[dict], admin_exposures: list[dict]) -> tuple[str, l
 
         port_level = p.get("risk_level", "INFO")
 
-        # Escalate the overall risk level to the highest seen
         if level_order.get(port_level, 0) > level_order.get(max_level, 0):
             max_level = port_level
 
@@ -661,6 +799,17 @@ def _assess_risk(ports: list[dict], admin_exposures: list[dict]) -> tuple[str, l
             f"PORT_{p['port']}_{p['service_name'].upper() or 'UNKNOWN'} "
             f"({port_level})"
         )
+
+        # ── CVE escalation: CVSS ≥ 9.0 forces CRITICAL ────────────────────
+        cve_data = p.get("cve_data", {})
+        for cve in cve_data.get("cves", []):
+            cvss = cve.get("cvss_score", 0.0) or 0.0
+            if cvss >= 9.0:
+                max_level = "CRITICAL"
+                flags.append(
+                    f"CVE_CRITICAL: {cve.get('cve_id', 'CVE-?')} "
+                    f"CVSS {cvss:.1f} on port {p['port']}"
+                )
 
     # Admin panels escalate to at least HIGH
     if admin_exposures:

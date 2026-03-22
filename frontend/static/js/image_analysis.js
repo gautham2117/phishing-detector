@@ -29,29 +29,32 @@ function setFile(file) {
     _selectedFile    = file;
     scanBtn.disabled = false;
     hideError();
-
     var reader = new FileReader();
     reader.onload = function (e) {
-        previewImg.src         = e.target.result;
-        previewMeta.textContent = file.name + "  —  " + formatBytes(file.size);
+        previewImg.src            = e.target.result;
+        previewMeta.textContent   = file.name + "  —  " + formatBytes(file.size);
         previewWrap.style.display = "block";
     };
     reader.readAsDataURL(file);
 }
 
 fileInput.addEventListener("change", function () {
-    if (this.files && this.files[0]) { setFile(this.files[0]); }
+    if (this.files && this.files[0]) setFile(this.files[0]);
 });
-
-dropZone.addEventListener("dragover",  function (e) { e.preventDefault(); dropZone.classList.add("att-drop-active"); });
-dropZone.addEventListener("dragleave", function ()  { dropZone.classList.remove("att-drop-active"); });
+dropZone.addEventListener("dragover", function (e) {
+    e.preventDefault();
+    dropZone.classList.add("att-drop-active");
+});
+dropZone.addEventListener("dragleave", function () {
+    dropZone.classList.remove("att-drop-active");
+});
 dropZone.addEventListener("drop", function (e) {
     e.preventDefault();
     dropZone.classList.remove("att-drop-active");
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) { setFile(e.dataTransfer.files[0]); }
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
 });
 dropZone.addEventListener("click", function (e) {
-    if (e.target.tagName !== "LABEL" && e.target.tagName !== "INPUT") { fileInput.click(); }
+    if (e.target.tagName !== "LABEL" && e.target.tagName !== "INPUT") fileInput.click();
 });
 
 
@@ -60,7 +63,7 @@ dropZone.addEventListener("click", function (e) {
 // ════════════════════════════════════════════════════════════════════════════
 
 scanBtn.addEventListener("click", function () {
-    if (!_selectedFile) { return; }
+    if (!_selectedFile) return;
     submitScan();
 });
 
@@ -68,10 +71,8 @@ function submitScan() {
     hideError();
     setLoading(true);
     resultsPanel.style.display = "none";
-
     var fd = new FormData();
     fd.append("file", _selectedFile);
-
     fetch(SCAN_URL, { method: "POST", body: fd })
         .then(function (r) { return r.json(); })
         .then(function (data) {
@@ -80,13 +81,14 @@ function submitScan() {
             renderResults(data);
             resultsPanel.style.display = "block";
             resultsPanel.scrollIntoView({ behavior: "smooth" });
+            switchExpTab("img-overview");
         })
         .catch(function (err) { setLoading(false); showError("Request failed: " + err.message); });
 }
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// RESULT RENDERING
+// MASTER DISPATCHER
 // ════════════════════════════════════════════════════════════════════════════
 
 function renderResults(data) {
@@ -96,51 +98,48 @@ function renderResults(data) {
     renderBrands(mod);
     renderKeywords(mod);
     renderOcrText(mod);
-    renderExplanation(mod, data);
+    renderGeminiDescription(mod);
+    renderEla(mod);
+    renderExplanationTabs(mod, data);
 }
 
-// ── Verdict card ──────────────────────────────────────────────────────────
+
+// ── Verdict ───────────────────────────────────────────────────────────────
 function renderVerdict(mod, data) {
     var verdict = (mod.verdict || "CLEAN").toUpperCase();
     var badge   = document.getElementById("imgVerdictBadge");
     badge.textContent = verdict;
     badge.className   = "ai-verdict-badge ai-verdict-" + verdict.toLowerCase().replace("_", "-");
-
     document.getElementById("imgRiskScore").textContent =
         "Risk score: " + (mod.risk_score || 0).toFixed(1) + " / 100";
-
     var w = mod.image_width || 0, h = mod.image_height || 0;
     document.getElementById("imgDimensions").textContent =
-        w + " \u00d7 " + h + " px  \u00b7  " + (mod.image_format || "\u2014");
-
+        w + " × " + h + " px  ·  " + (mod.image_format || "—");
     var actionMap = {
-        ALLOW: "\u2705 Allow", WARN: "\u26a0 Review carefully",
-        QUARANTINE: "\ud83d\udd12 Quarantine", BLOCK: "\ud83d\udeab Block"
+        ALLOW:      "✅ Allow",
+        WARN:       "⚠ Review carefully",
+        QUARANTINE: "🔒 Quarantine",
+        BLOCK:      "🚫 Block",
     };
     document.getElementById("imgAction").textContent =
-        "Action: " + (actionMap[data.recommended_action] || data.recommended_action || "\u2014");
+        "Action: " + (actionMap[data.recommended_action] || data.recommended_action || "—");
 }
 
-// ── Phishing Classifier card  ← FIXED: no more LABEL_1 displayed ─────────
+
+// ── Classifier card ───────────────────────────────────────────────────────
 function renderClassifier(mod) {
     var clf   = mod.classifier_result || {};
     var label = clf.label || "UNKNOWN";
     var score = clf.score || 0.0;
     var pct   = Math.round(score * 100);
-
-    // Label display: if backend normalised correctly this is always readable,
-    // but guard here too in case an old response slips through
-    var displayLabel = _normaliseLabelDisplay(label);
-    document.getElementById("imgClfLabel").textContent = displayLabel;
+    document.getElementById("imgClfLabel").textContent = _normLabel(label);
     document.getElementById("imgClfScore").textContent = pct + "%";
-
-    var bar     = document.getElementById("imgClfBar");
-    var noteEl  = document.getElementById("imgClfNote");
+    var bar    = document.getElementById("imgClfBar");
+    var noteEl = document.getElementById("imgClfNote");
     bar.style.width = pct + "%";
-
     if (label === "PHISHING") {
         bar.className      = "att-entropy-bar-fill att-entropy-red";
-        noteEl.textContent = "\u26a0 Classifier flagged image text as phishing content.";
+        noteEl.textContent = "⚠ Classifier flagged image text as phishing content.";
         noteEl.style.color = "var(--red)";
     } else if (label === "SAFE") {
         bar.className      = "att-entropy-bar-fill att-entropy-green";
@@ -155,35 +154,19 @@ function renderClassifier(mod) {
         noteEl.textContent = "Insufficient text for confident classification.";
         noteEl.style.color = "var(--text-muted)";
     }
-
     document.getElementById("imgOcrWords").textContent = (mod.ocr_word_count || 0).toLocaleString();
-    document.getElementById("imgFormat").textContent   = mod.image_format || "\u2014";
+    document.getElementById("imgFormat").textContent   = mod.image_format || "—";
     document.getElementById("imgFileSize").textContent = formatBytes(mod.file_size || 0);
 }
 
-function _normaliseLabelDisplay(label) {
-    // Guard against LABEL_0 / LABEL_1 reaching the UI even if backend missed it
-    var map = {
-        "LABEL_1": "PHISHING",
-        "LABEL_0": "SAFE",
-        "1":       "PHISHING",
-        "0":       "SAFE",
-        "INSUFFICIENT_DATA": "Insufficient Text",
-        "NO_TEXT":           "No Text",
-        "UNKNOWN":           "Unknown",
-    };
-    return map[label] || label;
-}
 
-// ── Detected brand names ──────────────────────────────────────────────────
+// ── Brands ────────────────────────────────────────────────────────────────
 function renderBrands(mod) {
-    var brands  = mod.detected_brands || [];
-    var countEl = document.getElementById("imgBrandsCount");
-    var listEl  = document.getElementById("imgBrandsList");
-    var noteEl  = document.getElementById("imgBrandsNote");
-    countEl.textContent = brands.length;
-    listEl.innerHTML    = "";
-
+    var brands = mod.detected_brands || [];
+    document.getElementById("imgBrandsCount").textContent = brands.length;
+    var listEl = document.getElementById("imgBrandsList");
+    var noteEl = document.getElementById("imgBrandsNote");
+    listEl.innerHTML = "";
     if (brands.length === 0) {
         listEl.innerHTML     = '<span class="att-empty-note">No known brand names detected.</span>';
         noteEl.style.display = "none";
@@ -198,14 +181,13 @@ function renderBrands(mod) {
     noteEl.style.display = "block";
 }
 
-// ── Phishing keywords ─────────────────────────────────────────────────────
-function renderKeywords(mod) {
-    var kws     = mod.phishing_keywords || [];
-    var countEl = document.getElementById("imgKwCount");
-    var listEl  = document.getElementById("imgKwList");
-    countEl.textContent = kws.length;
-    listEl.innerHTML    = "";
 
+// ── Keywords ──────────────────────────────────────────────────────────────
+function renderKeywords(mod) {
+    var kws = mod.phishing_keywords || [];
+    document.getElementById("imgKwCount").textContent = kws.length;
+    var listEl = document.getElementById("imgKwList");
+    listEl.innerHTML = "";
     if (kws.length === 0) {
         listEl.innerHTML = '<span class="att-empty-note">No phishing keywords detected.</span>';
         return;
@@ -218,153 +200,530 @@ function renderKeywords(mod) {
     });
 }
 
+
 // ── OCR text ──────────────────────────────────────────────────────────────
 function renderOcrText(mod) {
     var text = mod.ocr_text || "";
-    var el   = document.getElementById("imgOcrText");
-    el.textContent = (text && text.trim().length > 0)
-        ? text
-        : "No text extracted from image.";
+    document.getElementById("imgOcrText").textContent =
+        (text && text.trim().length > 0) ? text : "No text extracted from image.";
 }
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// RICH EXPLANATION RENDERER  ← NEW: renders structured dict from backend
+// GEMINI DESCRIPTION CARD
 // ════════════════════════════════════════════════════════════════════════════
 
-function renderExplanation(mod, data) {
-    var container = document.getElementById("imgExplanation");
-    if (!container) { return; }
+function renderGeminiDescription(mod) {
+    var card    = document.getElementById("geminiCard");
+    var loading = document.getElementById("geminiLoading");
+    var errorEl = document.getElementById("geminiError");
+    var textEl  = document.getElementById("geminiDescriptionText");
+    if (!card) return;
 
-    var exp = data.explanation || mod.explanation;
+    var gd = mod.gemini_description || {};
 
-    // ── Fallback: plain string (old response or error) ─────────────────────
-    if (!exp || typeof exp === "string") {
-        container.innerHTML =
-            '<p style="color:#cbd5e1;font-size:0.88rem;">' + _esc(exp || "Analysis complete.") + "</p>";
+    card.style.display = "block";
+    if (loading) loading.style.display = "none";
+    if (errorEl) errorEl.style.display = "none";
+    if (textEl)  textEl.textContent    = "";
+
+    if (gd.available && gd.description) {
+        textEl.textContent = gd.description;
+    } else if (gd.error) {
+        errorEl.textContent   = "⚠ " + gd.error;
+        errorEl.style.display = "block";
+    } else {
+        textEl.textContent = "Gemini description not available for this image.";
+        textEl.style.color = "var(--text-muted)";
+    }
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// ELA CARD
+// ════════════════════════════════════════════════════════════════════════════
+
+function renderEla(mod) {
+    var card       = document.getElementById("elaCard");
+    var grid       = document.getElementById("elaGrid");
+    var manipBadge = document.getElementById("elaManipulatedBadge");
+    if (!card || !grid) return;
+
+    var ela = mod.ela_analysis || {};
+
+    card.style.display = "block";
+
+    // Bug 4 FIX: guard against missing or empty explanation string.
+    // ela.explanation can be "" when ela.available is false and the
+    // module returned a default empty dict — always provide a fallback.
+    var explanationText = (ela.explanation && ela.explanation.trim())
+        ? ela.explanation
+        : "ELA is not available for this image format. "
+          + "Error Level Analysis only applies to JPEG images — "
+          + "it exploits JPEG lossy compression to reveal edited regions.";
+
+    // Not a JPEG — show explanation note, no stats
+    if (!ela.available) {
+        grid.innerHTML =
+            '<p class="ela-not-applicable">' + _esc(explanationText) + '</p>';
+        if (manipBadge) manipBadge.style.display = "none";
         return;
     }
 
-    var verdict  = (exp.verdict    || "CLEAN").toUpperCase();
-    var score    = exp.risk_score  || 0;
-    var summary  = exp.summary     || "";
-    var clf      = exp.classifier  || {};
-    var brandA   = exp.brand_analysis   || {};
-    var kwA      = exp.keyword_analysis || {};
-    var qrA      = exp.qr_analysis      || null;
-    var stegoA   = exp.stego_analysis   || null;
-    var exifA    = exp.exif_analysis    || null;
-    var ocrNote  = exp.ocr_note         || null;
-
-    var vColour = { CLEAN: "#22c55e", SUSPICIOUS: "#f59e0b", MALICIOUS: "#ef4444" }[verdict] || "#94a3b8";
+    var isManip = ela.is_potentially_manipulated || false;
+    if (manipBadge) manipBadge.style.display = isManip ? "inline-flex" : "none";
 
     var html = "";
 
-    // ── Header ────────────────────────────────────────────────────────────────
-    html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">';
-    html +=   '<span style="font-size:1.05rem;font-weight:700;color:' + vColour + ';">' + verdict + '</span>';
-    html +=   '<span style="color:#94a3b8;font-size:0.85rem;">Risk Score: <strong style="color:#e2e8f0;">' + score.toFixed(1) + ' / 100</strong></span>';
+    // ELA visualisation image
+    if (ela.ela_image_b64) {
+        html +=
+            '<div class="ela-image-wrap">'
+            + '<img src="data:image/png;base64,' + _esc(ela.ela_image_b64)
+            + '" alt="ELA difference map">'
+            + '<div class="ela-image-label">ELA difference map (10× amplified)</div>'
+            + '</div>';
+    }
+
+    // Stats + verdict panel
+    var statsHtml =
+        '<div class="ela-stats-grid">'
+        + _elaStat("Mean ELA",  ela.mean_ela != null ? ela.mean_ela.toFixed(3) : "—",
+                   (ela.mean_ela || 0) > 8.0)
+        + _elaStat("Max ELA",   ela.max_ela  != null ? ela.max_ela.toFixed(3)  : "—", false)
+        + _elaStat("Std Dev",   ela.std_ela  != null ? ela.std_ela.toFixed(3)  : "—",
+                   (ela.std_ela || 0) > 15.0)
+        + _elaStat("Threshold", "8.0 mean / 15.0 std", false)
+        + '<div class="ela-verdict-box ' + (isManip ? "manipulated" : "clean") + '">'
+        +   (isManip ? "⚠ Potential manipulation detected. " : "✅ ")
+        +   _esc(explanationText)
+        + '</div>'
+        + '</div>';
+
+    html += statsHtml;
+    grid.innerHTML = html;
+}
+
+function _elaStat(label, value, highlight) {
+    return (
+        '<div class="ela-stat-box">'
+        + '<div class="ela-stat-label">' + _esc(label) + '</div>'
+        + '<div class="ela-stat-value" style="color:'
+        +   (highlight ? "var(--red)" : "var(--text)") + '">'
+        + _esc(String(value)) + '</div>'
+        + '</div>'
+    );
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// 3-TAB EXPLANATION PANEL
+// ════════════════════════════════════════════════════════════════════════════
+
+function switchExpTab(tabName) {
+    document.querySelectorAll(".exp-tab").forEach(function (btn) {
+        btn.classList.toggle("active", btn.dataset.tab === tabName);
+    });
+    document.querySelectorAll(".exp-tab-content").forEach(function (panel) {
+        panel.classList.toggle("active", panel.id === "exp-tab-" + tabName);
+    });
+}
+
+function renderExplanationTabs(mod, data) {
+    var exp = (typeof data.explanation === "object" && data.explanation !== null)
+              ? data.explanation
+              : mod.explanation || {};
+
+    if (!exp || typeof exp === "string") {
+        document.getElementById("expOverviewBody").innerHTML =
+            '<p class="exp-narrative-para">' + _esc(String(exp || "Analysis complete.")) + '</p>';
+        return;
+    }
+
+    _renderOverviewTab(mod, data, exp);
+    _renderVisualTab(mod, exp);
+    _renderSignalsTab(exp);
+}
+
+
+// ── Tab 1: Overview ───────────────────────────────────────────────────────
+function _renderOverviewTab(mod, data, exp) {
+    var el      = document.getElementById("expOverviewBody");
+    var verdict = (exp.verdict || "CLEAN").toUpperCase();
+    var score   = exp.risk_score || 0;
+    var label   = verdict.toLowerCase();
+
+    var bannerMeta = {
+        clean:      { icon: "✅", label: "Clean",      color: "var(--green)" },
+        suspicious: { icon: "⚠️",  label: "Suspicious", color: "var(--amber)" },
+        malicious:  { icon: "🚨", label: "Phishing",   color: "var(--red)"   },
+    };
+    var bm = bannerMeta[label] || { icon: "❓", label: verdict, color: "var(--text-muted)" };
+
+    var actionMeta = {
+        ALLOW:      { label: "Allow",      cls: "action-allow",      icon: "✅" },
+        WARN:       { label: "Review",     cls: "action-warn",       icon: "⚠️" },
+        QUARANTINE: { label: "Quarantine", cls: "action-quarantine", icon: "🚨" },
+    };
+    var am = actionMeta[data.recommended_action || "WARN"] || actionMeta.WARN;
+
+    // Count active signals for badge
+    var signalCount = 0;
+    if (exp.brand_analysis   && exp.brand_analysis.count   > 0) signalCount++;
+    if (exp.keyword_analysis && exp.keyword_analysis.count > 0) signalCount++;
+    if (exp.qr_analysis      && exp.qr_analysis.malicious_urls
+        && exp.qr_analysis.malicious_urls.length > 0) signalCount++;
+    if (exp.stego_analysis   && exp.stego_analysis.suspicious) signalCount++;
+    if (exp.ela_analysis     && exp.ela_analysis.is_potentially_manipulated) signalCount++;
+    if (exp.exif_analysis    && exp.exif_analysis.flags
+        && exp.exif_analysis.flags.length > 0) signalCount++;
+    var badge = document.getElementById("expBadgeSignals");
+    if (badge) badge.textContent = signalCount || "";
+
+    var gd = exp.gemini_description || {};
+
+    var html =
+        '<div class="exp-risk-banner banner-' + label + '">'
+        + '<div class="exp-banner-icon">' + bm.icon + '</div>'
+        + '<div class="exp-banner-text">'
+        +   '<h3 style="color:' + bm.color + '">'
+        +     bm.label + ' — Score ' + score.toFixed(1) + '/100'
+        +   '</h3>'
+        +   '<p>' + _esc(exp.summary || "") + '</p>'
+        + '</div>'
+        + '</div>';
+
+    // Gemini summary in overview
+    if (gd.available && gd.description) {
+        html +=
+            '<div class="exp-section">'
+            + '<div class="exp-section-label">✨ Gemini AI — What this image shows</div>'
+            + '<div class="img-gemini-inline">'
+            +   '<p class="img-gemini-inline-text">' + _esc(gd.description) + '</p>'
+            + '</div>'
+            + '</div>';
+    }
+
+    // Narrative sentences
+    var narratives = _buildOverviewNarrative(exp, mod);
+    html +=
+        '<div class="exp-section">'
+        + '<div class="exp-section-label">Analysis Summary</div>'
+        + narratives.map(function (n) {
+            return '<p class="exp-narrative-para">' + _esc(n) + '</p>';
+          }).join("")
+        + '</div>';
+
+    // OCR warning
+    if (exp.ocr_note) {
+        html +=
+            '<div style="background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.25);'
+            + 'border-radius:6px;padding:10px 14px;margin-bottom:14px;">'
+            + '<p style="font-size:12px;color:var(--amber);margin:0">⚠ '
+            + _esc(exp.ocr_note) + '</p>'
+            + '</div>';
+    }
+
+    // Recommended action
+    html +=
+        '<div class="exp-section">'
+        + '<div class="exp-section-label">Recommended Action</div>'
+        + '<span class="exp-action-pill ' + am.cls + '">' + am.icon + ' ' + am.label + '</span>'
+        + '</div>';
+
+    el.innerHTML = html;
+}
+
+function _buildOverviewNarrative(exp, mod) {
+    var parts   = [];
+    var verdict = (exp.verdict || "CLEAN").toUpperCase();
+    var score   = exp.risk_score || 0;
+    var brands  = (exp.brand_analysis   || {}).brands_found   || [];
+    var kws     = (exp.keyword_analysis || {}).keywords_found || [];
+    var clf     = exp.classifier || {};
+
+    // Verdict sentence
+    if (verdict === "MALICIOUS") {
+        parts.push(
+            "The image scored " + score.toFixed(1) + "/100 — strong phishing indicators were found. "
+            + "This image should not be trusted and the source should be investigated."
+        );
+    } else if (verdict === "SUSPICIOUS") {
+        parts.push(
+            "The image scored " + score.toFixed(1) + "/100 — suspicious signals were detected. "
+            + "Manual review is recommended before acting on any content shown in this image."
+        );
+    } else {
+        parts.push(
+            "The image scored " + score.toFixed(1) + "/100. "
+            + "No significant phishing indicators were found. "
+            + "The image appears to be clean based on all analysis layers."
+        );
+    }
+
+    // Classifier
+    if (clf.label === "PHISHING") {
+        parts.push(
+            "The DistilBERT phishing classifier analysed the OCR-extracted text and returned "
+            + "PHISHING with " + (clf.score_pct || 0) + "% confidence."
+        );
+    } else if (clf.label === "SAFE") {
+        parts.push("The phishing classifier found no phishing content in the extracted text.");
+    } else {
+        parts.push(
+            "The classifier could not produce a reliable result — too little text was "
+            + "extracted by OCR. The verdict is based on brand detection, keyword "
+            + "matching, and structural analysis."
+        );
+    }
+
+    // Brands + keywords combined
+    if (brands.length > 0 && kws.length > 0) {
+        parts.push(
+            brands.length + " known brand name(s) (" + brands.slice(0, 3).join(", ") + ") "
+            + "and " + kws.length + " phishing keyword phrase(s) were detected in the image. "
+            + "The combination of brand impersonation and urgency language is a "
+            + "primary phishing technique."
+        );
+    } else if (brands.length > 0) {
+        parts.push(
+            brands.length + " brand name(s) detected: " + brands.join(", ") + ". "
+            + "Verify the image source — brand names alone do not confirm phishing."
+        );
+    } else if (kws.length > 0) {
+        parts.push(
+            kws.length + " phishing keyword phrase(s) were matched in the image text. "
+            + "Common patterns: urgency language, credential requests, account warnings."
+        );
+    }
+
+    // ELA
+    var ela = exp.ela_analysis;
+    if (ela && ela.available && ela.is_potentially_manipulated) {
+        parts.push(
+            "Error Level Analysis detected potential image manipulation "
+            + "(mean ELA: " + (ela.mean_ela || 0).toFixed(2) + "). "
+            + "This image may contain inserted or edited regions — a technique "
+            + "used to forge phishing screenshots."
+        );
+    }
+
+    return parts;
+}
+
+
+// ── Tab 2: Visual Analysis ────────────────────────────────────────────────
+function _renderVisualTab(mod, exp) {
+    var el  = document.getElementById("expVisualBody");
+    var gd  = exp.gemini_description || {};
+    var ela = exp.ela_analysis || {};
+
+    var html = "";
+
+    // Gemini description
+    html += '<div class="exp-section"><div class="exp-section-label">✨ Gemini 1.5 Pro — Full Image Description</div>';
+    if (gd.available && gd.description) {
+        html +=
+            '<div class="img-gemini-inline">'
+            + '<p class="img-gemini-inline-text">' + _esc(gd.description) + '</p>'
+            + '</div>'
+            + '<p style="font-size:11px;color:var(--text-muted);margin-top:6px">'
+            + 'Model: ' + _esc(gd.model || "gemini-1.5-pro")
+            + ' · Describes scene content, visible text, layout, and security-relevant observations.'
+            + '</p>';
+    } else {
+        html +=
+            '<div style="background:var(--bg3);border:1px solid var(--border);'
+            + 'border-radius:6px;padding:12px 14px;color:var(--text-muted);font-size:13px;">'
+            + _esc(gd.error || "Gemini description not available.") + '</div>';
+    }
     html += '</div>';
 
-    // ── Summary ───────────────────────────────────────────────────────────────
-    if (summary) {
-        html += '<p style="color:#cbd5e1;font-size:0.88rem;line-height:1.6;margin-bottom:14px;">' + _esc(summary) + '</p>';
-    }
+    // ELA visualisation
+    // Bug 4 FIX: use same fallback logic as renderEla() — never render empty text
+    var elaExplanationText = (ela.explanation && ela.explanation.trim())
+        ? ela.explanation
+        : "ELA is not available for this image format. "
+          + "Error Level Analysis only applies to JPEG images.";
 
-    // ── OCR warning ───────────────────────────────────────────────────────────
-    if (ocrNote) {
-        html += _imgSection("\u26a0 OCR Not Available", "#1e293b", "#f59e0b33", "#f59e0b55",
-            '<p style="color:#fcd34d;font-size:0.84rem;">' + _esc(ocrNote) + '</p>');
-    }
-
-    // ── Classifier card ───────────────────────────────────────────────────────
-    var clfColour = { PHISHING: "#ef4444", SAFE: "#22c55e", SUSPICIOUS: "#f59e0b" }[clf.label] || "#94a3b8";
-    var clfIcon   = clf.label === "PHISHING" ? "\ud83d\udea8" : clf.label === "SAFE" ? "\u2705" : "\u26a0";
-    var clfDisplay = _normaliseLabelDisplay(clf.label || "UNKNOWN");
-
-    var clfBody = "";
-    clfBody += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">';
-    clfBody +=   '<span style="font-size:1rem;font-weight:700;color:' + clfColour + ';">' + clfDisplay + '</span>';
-    clfBody +=   '<span style="color:#94a3b8;font-size:0.82rem;">' + (clf.score_pct || 0) + '% confidence</span>';
-    if (clf.raw_label && clf.raw_label !== clf.label) {
-        clfBody += '<span style="font-size:0.72rem;color:#475569;margin-left:auto;">raw: ' + _esc(clf.raw_label) + '</span>';
-    }
-    clfBody += '</div>';
-    clfBody += '<p style="color:#94a3b8;font-size:0.79rem;margin-bottom:6px;"><em>Method: ' + _esc(clf.method || "") + '</em></p>';
-    clfBody += '<p style="color:#cbd5e1;font-size:0.85rem;">' + _esc(clf.explanation || "") + '</p>';
-
-    html += _imgSection(clfIcon + " ML Phishing Classifier", "#0f172a", clfColour + "22", clfColour + "55", clfBody);
-
-    // ── Brand analysis card ───────────────────────────────────────────────────
-    var brandColour = brandA.count > 0 ? "#f59e0b" : "#22c55e";
-    var brandIcon   = brandA.count > 0 ? "\ud83c\udff7" : "\u2705";
-    var brandBody   = '<p style="color:#cbd5e1;font-size:0.85rem;margin-bottom:' + (brandA.count ? "10px" : "0") + ';">' + _esc(brandA.explanation || "") + '</p>';
-    if (brandA.brands_found && brandA.brands_found.length > 0) {
-        brandBody += '<div style="display:flex;flex-wrap:wrap;gap:5px;">';
-        brandA.brands_found.forEach(function (b) {
-            brandBody += _pill(b, "#422006", "#fbbf24");
-        });
-        brandBody += '</div>';
-    }
-    html += _imgSection(brandIcon + " Brand Detection (" + brandA.count + " found)", "#0f172a", brandColour + "22", brandColour + "55", brandBody);
-
-    // ── Keyword analysis card ─────────────────────────────────────────────────
-    var kwColour = kwA.count > 0 ? "#ef4444" : "#22c55e";
-    var kwIcon   = kwA.count > 0 ? "\u26a1" : "\u2705";
-    var kwBody   = '<p style="color:#cbd5e1;font-size:0.85rem;margin-bottom:' + (kwA.count ? "10px" : "0") + ';">' + _esc(kwA.explanation || "") + '</p>';
-    if (kwA.keywords_found && kwA.keywords_found.length > 0) {
-        kwBody += '<div style="display:flex;flex-wrap:wrap;gap:5px;">';
-        kwA.keywords_found.forEach(function (kw) {
-            kwBody += _pill(kw, "#450a0a", "#fca5a5");
-        });
-        kwBody += '</div>';
-    }
-    html += _imgSection(kwIcon + " Phishing Keyword Analysis (" + kwA.count + " matched)", "#0f172a", kwColour + "22", kwColour + "55", kwBody);
-
-    // ── QR codes card ─────────────────────────────────────────────────────────
-    if (qrA) {
-        var qrColour = qrA.malicious_urls && qrA.malicious_urls.length ? "#ef4444"
-                     : qrA.suspicious_urls && qrA.suspicious_urls.length ? "#f59e0b" : "#22c55e";
-        var qrBody = '<p style="color:#cbd5e1;font-size:0.85rem;margin-bottom:6px;">' + _esc(qrA.explanation || "") + '</p>';
-        if (qrA.malicious_urls && qrA.malicious_urls.length) {
-            qrBody += '<div style="margin-top:6px;"><span style="color:#ef4444;font-size:0.82rem;font-weight:600;">Malicious URLs:</span></div>';
-            qrA.malicious_urls.forEach(function (u) {
-                qrBody += '<div style="font-family:monospace;font-size:0.78rem;color:#fca5a5;word-break:break-all;margin-top:3px;">' + _esc(u) + '</div>';
-            });
+    html += '<div class="exp-section"><div class="exp-section-label">🔬 Error Level Analysis (ELA)</div>';
+    if (ela.available) {
+        html += '<div class="img-ela-inline-wrap">';
+        if (ela.ela_image_b64) {
+            html +=
+                '<img class="img-ela-inline-img" '
+                + 'src="data:image/png;base64,' + _esc(ela.ela_image_b64)
+                + '" alt="ELA difference map">';
         }
-        html += _imgSection("\ud83d\udcf7 QR Code Analysis (" + (qrA.code_count || 0) + " code(s))", "#0f172a", qrColour + "22", qrColour + "55", qrBody);
+        html +=
+            '<p style="font-size:13px;color:'
+            + (ela.is_potentially_manipulated ? "var(--red)" : "var(--green)")
+            + ';margin:0">'
+            + (ela.is_potentially_manipulated ? "⚠ " : "✅ ")
+            + _esc(elaExplanationText) + '</p>'
+            + '<p style="font-size:11px;color:var(--text-muted);margin-top:8px">'
+            + 'Mean: '  + (ela.mean_ela || 0).toFixed(3)
+            + ' · Max: ' + (ela.max_ela  || 0).toFixed(3)
+            + ' · Std: ' + (ela.std_ela  || 0).toFixed(3)
+            + '</p>';
+        html += '</div>';
+    } else {
+        html +=
+            '<p style="font-size:13px;color:var(--text-muted);">'
+            + _esc(elaExplanationText) + '</p>';
+    }
+    html += '</div>';
+
+    // Face + logo detection
+    var fl = mod.face_logo || {};
+    if (fl.available) {
+        html +=
+            '<div class="exp-section">'
+            + '<div class="exp-section-label">👤 Face &amp; Logo Detection</div>'
+            + '<p style="font-size:13px;color:var(--text-muted);">'
+            + 'Faces detected: <strong style="color:var(--text)">'
+            + (fl.face_count || 0) + '</strong>'
+            + ' · Logo candidate regions: <strong style="color:var(--text)">'
+            + (fl.logo_regions ? fl.logo_regions.length : 0) + '</strong>'
+            + '</p>'
+            + '</div>';
     }
 
-    // ── Steganography card ────────────────────────────────────────────────────
-    if (stegoA) {
-        var stegoColour = stegoA.suspicious ? "#f97316" : "#22c55e";
-        var stegoIcon   = stegoA.suspicious ? "\ud83d\udd75" : "\u2705";
-        var stegoBody   = '<p style="color:#cbd5e1;font-size:0.85rem;margin-bottom:' + (stegoA.flags && stegoA.flags.length ? "8px" : "0") + ';">' + _esc(stegoA.explanation || "") + '</p>';
-        if (stegoA.flags && stegoA.flags.length) {
-            stegoBody += '<ul style="margin:0;padding-left:18px;">';
-            stegoA.flags.forEach(function (f) {
-                stegoBody += '<li style="color:#fdba74;font-size:0.82rem;margin-bottom:3px;">' + _esc(f) + '</li>';
-            });
-            stegoBody += '</ul>';
-        }
-        html += _imgSection(stegoIcon + " Steganography Detection", "#0f172a", stegoColour + "22", stegoColour + "55", stegoBody);
-    }
-
-    // ── EXIF card ─────────────────────────────────────────────────────────────
+    // EXIF section
+    var exifA = exp.exif_analysis;
     if (exifA) {
-        var exifColour = exifA.flags && exifA.flags.length ? "#f59e0b" : "#22c55e";
-        var exifBody   = '<p style="color:#cbd5e1;font-size:0.85rem;margin-bottom:8px;">' + _esc(exifA.explanation || "") + '</p>';
+        html +=
+            '<div class="exp-section">'
+            + '<div class="exp-section-label">📷 EXIF Metadata</div>'
+            + '<p style="font-size:13px;color:var(--text-muted);margin-bottom:8px">'
+            + _esc(exifA.explanation || "") + '</p>';
         if (exifA.explanations && exifA.explanations.length) {
-            exifBody += '<ul style="margin:0;padding-left:18px;">';
+            html += '<ul style="margin:0;padding-left:18px;">';
             exifA.explanations.forEach(function (e) {
-                exifBody += '<li style="color:#fcd34d;font-size:0.82rem;margin-bottom:3px;">\u26a0 ' + _esc(e) + '</li>';
+                html += '<li style="color:var(--amber);font-size:12px;margin-bottom:4px">⚠ '
+                      + _esc(e) + '</li>';
             });
-            exifBody += '</ul>';
+            html += '</ul>';
         }
-        html += _imgSection("\ud83d\udcf0 EXIF Metadata Analysis (" + (exifA.flags ? exifA.flags.length : 0) + " flag(s))", "#0f172a", exifColour + "22", exifColour + "55", exifBody);
+        if (exifA.gps) {
+            html +=
+                '<p style="font-size:12px;color:var(--text-muted);margin-top:6px">'
+                + '📍 GPS: ' + exifA.gps.lat + ', ' + exifA.gps.lon + '</p>';
+        }
+        html += '</div>';
     }
 
-    container.innerHTML = html;
+    el.innerHTML = html;
+}
+
+
+// ── Tab 3: Signals & ML ───────────────────────────────────────────────────
+function _renderSignalsTab(exp) {
+    var el   = document.getElementById("expSignalsBody");
+    var html = "";
+
+    // Classifier
+    var clf    = exp.classifier || {};
+    var clfClr = clf.label === "PHISHING" ? "danger"
+               : clf.label === "SAFE"     ? "ok" : "warn";
+    html += _sigCard(
+        "🤖 ML Phishing Classifier",
+        _normLabel(clf.label || "UNKNOWN"),
+        clfClr,
+        '<p style="font-size:13px;color:var(--text-muted);margin-bottom:6px">'
+        + '<em>' + _esc(clf.method || "") + '</em></p>'
+        + '<p style="font-size:13px;color:var(--text)">'
+        + _esc(clf.explanation || "") + '</p>'
+    );
+
+    // Brands
+    var brandA = exp.brand_analysis || {};
+    html += _sigCard(
+        "🏷 Brand Detection",
+        brandA.count + " found",
+        brandA.count > 0 ? "warn" : "ok",
+        '<p style="font-size:13px;color:var(--text-muted);margin-bottom:'
+        + (brandA.count ? "8px" : "0") + '">'
+        + _esc(brandA.explanation || "") + '</p>'
+        + (brandA.brands_found && brandA.brands_found.length
+            ? '<div class="sig-tag-list">'
+              + brandA.brands_found.map(function (b) {
+                  return '<span class="sig-tag warn">' + _esc(b) + '</span>';
+                }).join("") + '</div>'
+            : "")
+    );
+
+    // Keywords
+    var kwA = exp.keyword_analysis || {};
+    html += _sigCard(
+        "🔍 Phishing Keyword Analysis",
+        kwA.count + " matched",
+        kwA.count > 0 ? "danger" : "ok",
+        '<p style="font-size:13px;color:var(--text-muted);margin-bottom:'
+        + (kwA.count ? "8px" : "0") + '">'
+        + _esc(kwA.explanation || "") + '</p>'
+        + (kwA.keywords_found && kwA.keywords_found.length
+            ? '<div class="sig-tag-list">'
+              + kwA.keywords_found.map(function (kw) {
+                  return '<span class="sig-tag danger">' + _esc(kw) + '</span>';
+                }).join("") + '</div>'
+            : "")
+    );
+
+    // QR
+    var qrA = exp.qr_analysis;
+    if (qrA) {
+        var qrSev = (qrA.malicious_urls  && qrA.malicious_urls.length)  ? "danger"
+                  : (qrA.suspicious_urls && qrA.suspicious_urls.length) ? "warn" : "ok";
+        var qrBody = '<p style="font-size:13px;color:var(--text-muted)">'
+                   + _esc(qrA.explanation || "") + '</p>';
+        if (qrA.malicious_urls && qrA.malicious_urls.length) {
+            qrBody += '<div style="margin-top:6px">';
+            qrA.malicious_urls.forEach(function (u) {
+                qrBody += '<div style="font-family:monospace;font-size:11px;'
+                        + 'color:var(--red);word-break:break-all">' + _esc(u) + '</div>';
+            });
+            qrBody += '</div>';
+        }
+        html += _sigCard("📷 QR Code Analysis", qrA.code_count + " code(s)", qrSev, qrBody);
+    }
+
+    // Stego
+    var stegoA = exp.stego_analysis;
+    if (stegoA) {
+        var stegoSev = stegoA.suspicious ? "warn" : "ok";
+        html += _sigCard(
+            "🕵 Steganography Detection",
+            stegoA.suspicious
+                ? "Suspicious (" + stegoA.confidence + " confidence)"
+                : "Clean",
+            stegoSev,
+            '<p style="font-size:13px;color:var(--text-muted);margin-bottom:'
+            + (stegoA.flags && stegoA.flags.length ? "8px" : "0") + '">'
+            + _esc(stegoA.explanation || "") + '</p>'
+            + (stegoA.flags && stegoA.flags.length
+                ? '<div class="sig-tag-list">'
+                  + stegoA.flags.map(function (f) {
+                      return '<span class="sig-tag warn">' + _esc(f) + '</span>';
+                    }).join("") + '</div>'
+                : "")
+        );
+    }
+
+    el.innerHTML = html;
+}
+
+function _sigCard(title, badge, severity, bodyHtml) {
+    return (
+        '<div class="sig-card">'
+        + '<div class="sig-card-header">'
+        +   '<span class="sig-card-title">'  + _esc(title) + '</span>'
+        +   '<span class="sig-card-badge sig-badge-' + severity + '">'
+        +     _esc(badge) + '</span>'
+        + '</div>'
+        + '<div class="sig-card-body">' + bodyHtml + '</div>'
+        + '</div>'
+    );
 }
 
 
@@ -376,7 +735,7 @@ function loadHistory() {
     fetch(HISTORY_URL + "?limit=20")
         .then(function (r) { return r.json(); })
         .then(function (data) {
-            if (data.status !== "success") { return; }
+            if (data.status !== "success") return;
             renderHistory(data.scans || []);
         })
         .catch(function () {});
@@ -384,60 +743,64 @@ function loadHistory() {
 
 function renderHistory(scans) {
     historyBody.innerHTML = "";
-    if (scans.length === 0) {
+    if (!scans.length) {
         historyBody.innerHTML = '<tr><td colspan="9" class="att-empty-row">No scans yet.</td></tr>';
         return;
     }
     scans.forEach(function (s) {
         var verdict      = (s.verdict || "CLEAN").toUpperCase();
-        var verdictClass = { CLEAN: "badge-safe", SUSPICIOUS: "badge-suspicious", MALICIOUS: "badge-malicious" }[verdict] || "badge-safe";
-        var dims = (s.image_width || 0) + "\u00d7" + (s.image_height || 0);
-        var ts   = (s.scanned_at || "").replace("T", " ").replace("Z", "").slice(0, 19);
-        var brands = (s.detected_brands  || []).length;
+        var verdictClass = {
+            CLEAN:      "badge-safe",
+            SUSPICIOUS: "badge-suspicious",
+            MALICIOUS:  "badge-malicious",
+        }[verdict] || "badge-safe";
+        var dims   = (s.image_width || 0) + "×" + (s.image_height || 0);
+        var ts     = (s.scanned_at || "").replace("T", " ").replace("Z", "").slice(0, 19);
+        var brands = (s.detected_brands   || []).length;
         var kws    = (s.phishing_keywords || []).length;
-
         var tr = document.createElement("tr");
         tr.innerHTML =
-            "<td>" + s.id + "</td>" +
-            "<td class='att-fname'>" + escapeHtml(s.filename) + "</td>" +
-            "<td>" + dims + "</td>" +
-            "<td>" + (s.ocr_word_count || 0) + "</td>" +
-            "<td class='" + (brands > 0 ? "att-cell-amber" : "") + "'>" + brands + "</td>" +
-            "<td class='" + (kws    > 0 ? "att-cell-red"   : "") + "'>" + kws    + "</td>" +
-            "<td>" + (s.risk_score || 0).toFixed(1) + "</td>" +
-            "<td><span class='badge " + verdictClass + "'>" + verdict + "</span></td>" +
-            "<td class='att-ts'>" + ts + "</td>";
+            "<td>" + s.id + "</td>"
+            + "<td class='att-fname'>" + escapeHtml(s.filename || "—") + "</td>"
+            + "<td>" + dims + "</td>"
+            + "<td>" + (s.ocr_word_count || 0) + "</td>"
+            + "<td class='" + (brands > 0 ? "att-cell-amber" : "") + "'>" + brands + "</td>"
+            + "<td class='" + (kws    > 0 ? "att-cell-red"   : "") + "'>" + kws    + "</td>"
+            + "<td>" + (s.risk_score || 0).toFixed(1) + "</td>"
+            + "<td><span class='badge " + verdictClass + "'>" + verdict + "</span></td>"
+            + "<td class='att-ts'>" + ts + "</td>";
         historyBody.appendChild(tr);
     });
 }
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// SHARED HELPERS
+// UTILS
 // ════════════════════════════════════════════════════════════════════════════
 
-function _imgSection(title, bg, borderBg, borderColour, bodyHtml) {
-    return (
-        '<div style="background:' + bg + ';border:1px solid ' + borderColour +
-        ';border-radius:6px;padding:12px 14px;margin-bottom:10px;">' +
-        '<div style="font-size:0.86rem;font-weight:600;color:#e2e8f0;margin-bottom:8px;">' +
-        _esc(title) + '</div>' +
-        bodyHtml + '</div>'
-    );
-}
-
-function _pill(text, bg, colour) {
-    return (
-        '<span style="display:inline-block;padding:2px 8px;border-radius:99px;' +
-        'font-size:0.75rem;background:' + (bg || "#1e293b") + ';color:' + (colour || "#94a3b8") +
-        ';border:1px solid ' + (colour || "#94a3b8") + '33;">' + _esc(text) + '</span>'
-    );
+// Bug 2 FIX: _normLabel was defined twice — once inside renderClassifier
+// and once inside _renderSignalsTab. Both definitions were identical.
+// Consolidated here as a single top-level function used by both callers.
+function _normLabel(label) {
+    var map = {
+        "LABEL_1":          "PHISHING",
+        "1":                "PHISHING",
+        "LABEL_0":          "SAFE",
+        "0":                "SAFE",
+        "INSUFFICIENT_DATA":"Insufficient Text",
+        "NO_TEXT":          "No Text",
+        "UNKNOWN":          "Unknown",
+    };
+    return map[label] || label;
 }
 
 function _esc(str) {
     return (str || "").toString()
-        .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        .replace(/&/g,  "&amp;")
+        .replace(/</g,  "&lt;")
+        .replace(/>/g,  "&gt;")
+        .replace(/"/g,  "&quot;")
+        .replace(/'/g,  "&#039;");
 }
 
 function setLoading(on) {
@@ -446,17 +809,18 @@ function setLoading(on) {
     spinner.style.display = on ? "inline" : "none";
 }
 
-function showError(msg) { imgError.textContent = "\u26a0 " + msg; imgError.style.display = "block"; }
+function showError(msg) { imgError.textContent = "⚠ " + msg; imgError.style.display = "block"; }
 function hideError()    { imgError.style.display = "none"; imgError.textContent = ""; }
 
 function formatBytes(bytes) {
-    if (bytes < 1024)    { return bytes + " B"; }
-    if (bytes < 1048576) { return (bytes / 1024).toFixed(1) + " KB"; }
+    if (bytes < 1024)    return bytes + " B";
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
     return (bytes / 1048576).toFixed(2) + " MB";
 }
 
 function escapeHtml(str) {
-    return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    return (str || "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;")
         .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 

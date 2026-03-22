@@ -65,28 +65,27 @@
   <!-- ── 4-column intelligence grid ── -->
   <div class="intel-grid">
 
-    <!-- WHOIS card -->
+    <!-- WHOIS card — typosquatting row added -->
     <div class="module-card">
       <h3>WHOIS &amp; domain age</h3>
       <table class="kv-table" id="whois-table">
-        <tr><td>Registrar</td><td id="w-registrar">—</td></tr>
-        <tr><td>Created</td>  <td id="w-created">—</td></tr>
-        <tr><td>Expires</td>  <td id="w-expires">—</td></tr>
-        {#- FIX: domain_age_days is a top-level key in analyze_url() result,
-            not nested inside whois. Populated by url_intel.js via AJAX. -#}
-        <tr><td>Age</td>          <td id="w-age">—</td></tr>
+        <tr><td>Registrar</td>   <td id="w-registrar">—</td></tr>
+        <tr><td>Created</td>     <td id="w-created">—</td></tr>
+        <tr><td>Expires</td>     <td id="w-expires">—</td></tr>
+        <tr><td>Age</td>         <td id="w-age">—</td></tr>
         <tr><td>Young domain?</td><td id="w-young">—</td></tr>
+        <tr>
+          <td data-help="Typosquatting registers domains visually similar to trusted brands — e.g. paypa1.com vs paypal.com. Edit distance measures how many character changes separate the two.">
+            Typosquat?
+          </td>
+          <td id="w-typosquat">—</td>
+        </tr>
       </table>
     </div>
 
-    <!-- SSL card -->
+    <!-- SSL card — CT rows added -->
     <div class="module-card">
       <h3>SSL / TLS certificate</h3>
-      <!--
-        FIX: _ssl_check() returns "is_valid" (not "valid").
-        The JS setBoolPill("s-valid", s.is_valid, ...) now reads the
-        correct key so "Valid?" shows the pill instead of "—".
-      -->
       <table class="kv-table" id="ssl-table">
         <tr><td>HTTPS?</td>      <td id="s-https">—</td></tr>
         <tr><td>Valid?</td>      <td id="s-valid">—</td></tr>
@@ -94,19 +93,14 @@
         <tr><td>Expires</td>     <td id="s-expiry">—</td></tr>
         <tr><td>Self-signed?</td><td id="s-self">—</td></tr>
         <tr><td>Free cert?</td>  <td id="s-free">—</td></tr>
+        <tr><td>CT issued</td>   <td id="s-ct-issued">—</td></tr>
+        <tr><td>Fresh cert?</td> <td id="s-ct-fresh">—</td></tr>
       </table>
     </div>
 
     <!-- IP / Geo card -->
     <div class="module-card">
       <h3>IP &amp; geolocation</h3>
-      <!--
-        FIX: "org" is now a separate top-level key in the analyze_url()
-        result. Previously _ip_and_geo() stored the full org string in
-        geo_data["org"] but analyze_url() only surfaced "asn", so the JS
-        g-org cell read ui.asn and showed "AS13335" for both rows.
-        Now ui.org = "AS13335 Cloudflare, Inc." and ui.asn = "AS13335".
-      -->
       <table class="kv-table">
         <tr><td>IP address</td>  <td id="g-ip">—</td></tr>
         <tr><td>Country</td>     <td id="g-country">—</td></tr>
@@ -121,12 +115,14 @@
     <div class="module-card">
       <h3>DNS records</h3>
       <table class="kv-table">
-        <tr><td>A records</td>   <td id="d-a">—</td></tr>
-        <tr><td>MX records</td>  <td id="d-mx">—</td></tr>
-        <tr><td>NS records</td>  <td id="d-ns">—</td></tr>
-        <tr><td>SPF record?</td> <td id="d-spf">—</td></tr>
-        <tr><td>DMARC record?</td><td id="d-dmarc">—</td></tr>
-        <tr><td>Free DNS?</td>   <td id="d-freedns">—</td></tr>
+        <tr><td>A records</td>    <td id="d-a">—</td></tr>
+        <tr><td>MX records</td>   <td id="d-mx">—</td></tr>
+        <tr><td>NS records</td>   <td id="d-ns">—</td></tr>
+        <tr><td data-help="Sender Policy Framework (SPF) verifies that an email was sent from an IP address authorized by the domain's DNS records. FAIL means the IP is not on the allowlist.">SPF record?</td>
+            <td id="d-spf">—</td></tr>
+        <tr><td data-help="Domain-based Message Authentication Reporting and Conformance (DMARC) ties SPF and DKIM together and tells receiving servers what to do with unauthenticated mail.">DMARC record?</td>
+            <td id="d-dmarc">—</td></tr>
+        <tr><td>Free DNS?</td>    <td id="d-freedns">—</td></tr>
       </table>
     </div>
 
@@ -155,12 +151,7 @@
     <p class="model-name" id="ml-model-name">—</p>
   </div>
 
-  <!-- ── Subdomain Enumeration card (NEW) ── -->
-  <!--
-    This card is hidden by default and shown/populated by renderSubdomains()
-    in url_intel.js after a scan completes. It is always present in the DOM
-    so the JS can reference it without needing to create elements dynamically.
-  -->
+  <!-- ── Subdomain Enumeration card ── -->
   <div class="card" id="subdomain-card" style="display:none">
     <h2>
       Subdomain enumeration
@@ -171,24 +162,13 @@
     <p class="hint" id="subdomain-source-note" style="margin-bottom:12px">
       Sources: Certificate Transparency (crt.sh) + DNS brute-force
     </p>
-
-    <!-- Summary risk pills row -->
     <div id="subdomain-risk-summary" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px"></div>
-
-    <!-- Subdomains table -->
     <div style="overflow-x:auto">
       <table class="data-table" id="subdomain-table">
         <thead>
           <tr>
-            <th>Subdomain</th>
-            <th>Source</th>
-            <th>IP</th>
-            <th>Resolves</th>
-            <th>SSL</th>
-            <th>ML score</th>
-            <th>Risk</th>
-            <th>Label</th>
-            <th>Flags</th>
+            <th>Subdomain</th><th>Source</th><th>IP</th><th>Resolves</th>
+            <th>SSL</th><th>ML score</th><th>Risk</th><th>Label</th><th>Flags</th>
           </tr>
         </thead>
         <tbody id="subdomain-table-body">
@@ -198,11 +178,50 @@
     </div>
   </div>
 
-  <!-- ── Explanation card ── -->
-  <div class="card">
-    <h2>Explanation</h2>
-    <p class="explanation" id="explanation-text">—</p>
-  </div>
+  <!-- ══════════════════════════════════════════════════════
+       Explanation — 3-tab panel (replaces old explanation card)
+       ══════════════════════════════════════════════════════ -->
+  <div class="card" id="explanation-card">
+
+    <div class="exp-tab-bar">
+      <button class="exp-tab active" data-tab="overview"
+              onclick="switchExpTab('overview')">
+        📋 Overview
+      </button>
+      <button class="exp-tab" data-tab="domain-details"
+              onclick="switchExpTab('domain-details')">
+        🔍 Domain Details
+        <span class="exp-tab-badge" id="exp-badge-flags"></span>
+      </button>
+      <button class="exp-tab" data-tab="flags-ml"
+              onclick="switchExpTab('flags-ml')">
+        🚩 Flags &amp; ML
+        <span class="exp-tab-badge exp-tab-badge-red" id="exp-badge-ml"></span>
+      </button>
+    </div>
+
+    <!-- Tab: Overview -->
+    <div class="exp-tab-content active" id="exp-tab-overview">
+      <div id="exp-overview-body">
+        <p class="exp-placeholder">Run a scan to see the analysis.</p>
+      </div>
+    </div>
+
+    <!-- Tab: Domain Details -->
+    <div class="exp-tab-content" id="exp-tab-domain-details">
+      <div id="exp-domaindetails-body">
+        <p class="exp-placeholder">No domain details yet.</p>
+      </div>
+    </div>
+
+    <!-- Tab: Flags & ML -->
+    <div class="exp-tab-content" id="exp-tab-flags-ml">
+      <div id="exp-flagsml-body">
+        <p class="exp-placeholder">No flags yet.</p>
+      </div>
+    </div>
+
+  </div><!-- /explanation-card -->
 
 </div><!-- /result-card -->
 
@@ -212,14 +231,8 @@
   <table class="data-table">
     <thead>
       <tr>
-        <th>Domain</th>
-        <th>IP</th>
-        <th>Country</th>
-        <th>Age (days)</th>
-        <th>SSL</th>
-        <th>ML score</th>
-        <th>Label</th>
-        <th>Scanned at</th>
+        <th>Domain</th><th>IP</th><th>Country</th><th>Age (days)</th>
+        <th>SSL</th><th>ML score</th><th>Label</th><th>Scanned at</th>
       </tr>
     </thead>
     <tbody id="history-table-body">
@@ -262,6 +275,243 @@
     </tbody>
   </table>
 </div>
+
+<!-- ══════════════════════════════════════════════════════════
+     Scoped styles
+     ══════════════════════════════════════════════════════════ -->
+<style>
+/* ── Explanation tab bar ──────────────────────────────────── */
+.exp-tab-bar {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin: -4px -4px 20px;
+}
+.exp-tab {
+  position: relative;
+  padding: 10px 18px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color .15s, border-color .15s;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.exp-tab:hover              { color: var(--text); }
+.exp-tab.active             { color: var(--blue); border-bottom-color: var(--blue); }
+
+.exp-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--bg3);
+  color: var(--text-muted);
+}
+.exp-tab-badge-red { background: rgba(248,113,113,.2); color: var(--red); }
+
+.exp-tab-content            { display: none; animation: fadeTabIn .2s ease; }
+.exp-tab-content.active     { display: block; }
+@keyframes fadeTabIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+
+.exp-placeholder            { color: var(--text-muted); font-style: italic; font-size: 13px; }
+
+/* ── Overview tab ─────────────────────────────────────────── */
+.exp-risk-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+  border: 1px solid;
+}
+.exp-risk-banner.banner-safe       { background: rgba(74,222,128,.07);  border-color: rgba(74,222,128,.25); }
+.exp-risk-banner.banner-suspicious { background: rgba(251,191,36,.07);  border-color: rgba(251,191,36,.25); }
+.exp-risk-banner.banner-malicious  { background: rgba(248,113,113,.09); border-color: rgba(248,113,113,.30); }
+.exp-risk-banner.banner-unknown    { background: var(--bg3); border-color: var(--border); }
+
+.exp-banner-icon  { font-size: 30px; line-height: 1; flex-shrink: 0; }
+.exp-banner-text h3 { margin: 0 0 4px; font-size: 15px; font-weight: 700; }
+.exp-banner-text p  { margin: 0; font-size: 13px; color: var(--text-muted); line-height: 1.55; }
+
+.exp-section        { margin-bottom: 20px; }
+.exp-section:last-child { margin-bottom: 0; }
+.exp-section-label  { font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+                      color: var(--text-muted); margin-bottom: 8px; font-weight: 600; }
+.exp-narrative-para { font-size: 13px; line-height: 1.8; color: var(--text); margin: 0 0 8px; }
+.exp-narrative-para:last-child { margin-bottom: 0; }
+.exp-divider        { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+.exp-action-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.action-allow       { background: rgba(74,222,128,.12);  color: var(--green); border: 1px solid rgba(74,222,128,.3); }
+.action-warn        { background: rgba(251,191,36,.12);  color: var(--amber); border: 1px solid rgba(251,191,36,.3); }
+.action-quarantine  { background: rgba(248,113,113,.12); color: var(--red);   border: 1px solid rgba(248,113,113,.3); }
+.action-investigate { background: rgba(124,106,247,.12); color: var(--blue);  border: 1px solid rgba(124,106,247,.3); }
+
+/* ── Domain Details tab ───────────────────────────────────── */
+.dd-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.dd-section:last-child { margin-bottom: 0; }
+
+.dd-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg3);
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  font-weight: 600;
+}
+.dd-section-header:hover { background: rgba(124,106,247,.08); }
+.dd-chevron { margin-left: auto; color: var(--text-muted); font-size: 11px; transition: transform .2s; }
+.dd-chevron.open { transform: rotate(90deg); }
+
+.dd-section-body {
+  display: none;
+  padding: 12px 14px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+}
+.dd-section-body.open { display: block; }
+
+.dd-kv-grid {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 6px 12px;
+  font-size: 12px;
+}
+.dd-kv-label { color: var(--text-muted); font-weight: 500; }
+.dd-kv-value { color: var(--text); font-family: monospace; word-break: break-all; }
+
+.dd-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.65;
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: var(--bg3);
+  border-radius: 6px;
+  border-left: 3px solid var(--border);
+}
+.dd-note.note-warn     { border-left-color: var(--amber); }
+.dd-note.note-critical { border-left-color: var(--red); }
+.dd-note.note-ok       { border-left-color: var(--green); }
+
+/* ── Flags & ML tab ───────────────────────────────────────── */
+.flag-detail-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.flag-detail-card:last-child { margin-bottom: 0; }
+
+.flag-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg3);
+  font-size: 13px;
+}
+.flag-sev-chip {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.chip-high   { background: rgba(248,113,113,.18); color: var(--red); }
+.chip-medium { background: rgba(251,191,36,.15);  color: var(--amber); }
+.chip-low    { background: rgba(124,106,247,.12); color: var(--blue); }
+
+.flag-detail-body {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg2);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+.ml-detail-box {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-top: 16px;
+}
+.ml-detail-box h4 { margin: 0 0 12px; font-size: 12px; text-transform: uppercase;
+                    letter-spacing: .07em; color: var(--text-muted); }
+
+.typo-detail-box {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-top: 16px;
+}
+.typo-detail-box h4 { margin: 0 0 12px; font-size: 12px; text-transform: uppercase;
+                      letter-spacing: .07em; color: var(--text-muted); }
+
+.clean-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  background: rgba(74,222,128,.06);
+  border: 1px solid rgba(74,222,128,.2);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text);
+}
+.clean-banner-icon { font-size: 28px; flex-shrink: 0; }
+
+/* CT fresh badge (used by existing renderCertTransparency) */
+.ct-fresh-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.ct-fresh-warn { background: rgba(248,113,113,.15); color: var(--red); }
+.ct-fresh-ok   { background: rgba(74,222,128,.12);  color: var(--green); }
+
+/* Typosquat inline pill in WHOIS table */
+.typo-inline-suspect { color: var(--red); font-weight: 600; font-size: 12px; }
+.typo-inline-clean   { color: var(--green); font-size: 12px; }
+</style>
+
 {% endblock %}
 
 {% block scripts %}

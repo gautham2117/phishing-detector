@@ -58,8 +58,13 @@
       <span class="score-label">/ 100</span>
     </div>
 
+    <!-- Action pill -->
+    <div style="margin-top:10px;">
+      <span class="action-pill" id="action-pill">—</span>
+    </div>
+
     <!-- Severity summary pills -->
-    <div class="sev-summary-row" id="sev-summary"></div>
+    <div class="sev-summary-row" id="sev-summary" style="margin-top:10px;"></div>
   </div>
 
   <!-- ── Triggered rules checklist ── -->
@@ -82,7 +87,7 @@
     <div id="passed-rules-list"></div>
   </div>
 
-</div>
+</div><!-- /result-card -->
 
 <!-- ── Full rule registry (always visible) ── -->
 <div class="card">
@@ -119,8 +124,118 @@
   </div>
 </div>
 
+<!-- ══════════════════════════════════════════════════════════
+     Rule Analytics — added below full registry (Phase 4)
+     ══════════════════════════════════════════════════════════ -->
+<div class="card" id="analytics-card">
+
+  <div style="display:flex; align-items:center; justify-content:space-between;
+              flex-wrap:wrap; gap:10px; margin-bottom:6px;">
+    <h2 style="margin:0;">
+      Rule Analytics
+      <span class="count-badge" id="analytics-url-count">—</span>
+      <span style="font-size:12px; font-weight:400; color:var(--text-muted);
+                   margin-left:6px;">URLs analyzed</span>
+    </h2>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <span class="last-updated" id="analytics-time" style="font-size:11px;">—</span>
+      <button class="btn-refresh" onclick="loadAnalytics(true)">Refresh</button>
+    </div>
+  </div>
+
+  <p class="hint" style="margin-bottom:20px;">
+    Rule hit frequency across the last 50 scanned URLs.
+    Shows which heuristics fire most often in real traffic.
+    Results are cached for 60 seconds.
+  </p>
+
+  <!-- Loading / empty state -->
+  <div id="analytics-loading" style="text-align:center; padding:32px 0;
+       color:var(--text-muted); font-size:13px;">
+    <div class="spinner" style="margin:0 auto 12px; width:24px; height:24px;
+         border-width:3px;"></div>
+    Loading analytics...
+  </div>
+
+  <div id="analytics-empty" style="display:none; text-align:center;
+       padding:36px 0; color:var(--text-muted);">
+    <div style="font-size:32px; margin-bottom:10px;">📊</div>
+    <p style="font-size:13px;">No URL scan history yet.<br>
+      Run some URL scans first, then analytics will appear here.</p>
+  </div>
+
+  <!-- Chart container -->
+  <div id="analytics-chart-wrap" style="display:none;">
+    <canvas id="analytics-chart"
+            style="width:100%; max-height:380px;"
+            aria-label="Rule hit frequency bar chart">
+    </canvas>
+  </div>
+
+  <!-- Frequency table (below chart) -->
+  <div id="analytics-table-wrap" style="display:none; margin-top:24px;">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Rule</th>
+          <th>Severity</th>
+          <th>Hits</th>
+          <th>Hit rate</th>
+        </tr>
+      </thead>
+      <tbody id="analytics-table-body"></tbody>
+    </table>
+  </div>
+
+</div><!-- /analytics-card -->
+
+<!-- ── Scoped styles ── -->
+<style>
+/* Hit-rate bar inside analytics table */
+.hit-rate-bar-track {
+  display: inline-block;
+  width: 80px;
+  height: 6px;
+  background: var(--bg3);
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.hit-rate-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--blue);
+  transition: width .4s ease;
+}
+.hit-rate-bar-fill.fill-critical { background: var(--red); }
+.hit-rate-bar-fill.fill-high     { background: var(--amber); }
+.hit-rate-bar-fill.fill-medium   { background: var(--blue); }
+.hit-rate-bar-fill.fill-low      { background: var(--green); }
+
+/* Analytics table rank badge */
+.rank-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--bg3);
+  color: var(--text-muted);
+}
+.rank-badge.rank-1 { background: rgba(251,191,36,.2);  color: var(--amber); }
+.rank-badge.rank-2 { background: rgba(148,163,184,.15); color: #94a3b8; }
+.rank-badge.rank-3 { background: rgba(205,127,50,.15);  color: #cd7f32; }
+</style>
+
 {% endblock %}
 
 {% block scripts %}
+<!-- Chart.js for the analytics bar chart -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"
+        crossorigin="anonymous"></script>
 <script src="/static/js/detection_rules.js"></script>
 {% endblock %}

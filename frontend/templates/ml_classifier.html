@@ -13,7 +13,9 @@
 <div class="card">
   <h2>Classify a URL</h2>
   <div class="url-input-row">
-    <input type="text" id="url-input"
+    <label for="url-input" class="sr-only">URL to classify</label>
+    <input type="text" id="url-input" name="url-input"
+           aria-label="URL to classify"
            placeholder="https://example.com/path"
            onkeydown="if(event.key==='Enter') runClassifier()">
     <button class="btn-primary" onclick="runClassifier()">Classify</button>
@@ -22,19 +24,24 @@
   <!-- Weight sliders -->
   <div class="weight-sliders">
     <div class="weight-row">
-      <label>Random Forest weight</label>
-      <input type="range" id="rf-weight" min="0" max="100" value="45"
+      <label for="rf-weight">Random Forest weight</label>
+      <input type="range" id="rf-weight" name="rf-weight"
+             aria-label="Random Forest weight (0 to 100)"
+             min="0" max="100" value="45"
              oninput="syncWeights('rf')">
       <span id="rf-weight-val">0.45</span>
     </div>
     <div class="weight-row">
-      <label>BERT weight</label>
-      <input type="range" id="bert-weight" min="0" max="100" value="55"
+      <label for="bert-weight">BERT weight</label>
+      <input type="range" id="bert-weight" name="bert-weight"
+             aria-label="BERT weight (0 to 100)"
+             min="0" max="100" value="55"
              oninput="syncWeights('bert')">
       <span id="bert-weight-val">0.55</span>
     </div>
   </div>
-  <p class="hint">
+  <p class="hint"
+     data-help="The ensemble combines the Random Forest (structural URL features) and BERT (semantic understanding) classifiers using a weighted average. Neither model alone is as accurate as both together.">
     Soft-voting ensemble: final score =
     (RF weight × RF score) + (BERT weight × BERT score).
     Weights must sum to 1.0.
@@ -124,13 +131,273 @@
     <canvas id="ensemble-chart" height="80"></canvas>
   </div>
 
-  <!-- ── Explanation ── -->
-  <div class="card">
-    <h2>Explanation</h2>
-    <p class="explanation" id="explanation-text">—</p>
-  </div>
+  <!-- ══════════════════════════════════════════════════════
+       Explanation — 3-tab panel (replaces old explanation card)
+       ══════════════════════════════════════════════════════ -->
+  <div class="card" id="explanation-card">
 
-</div>
+    <div class="exp-tab-bar">
+      <button class="exp-tab active" data-tab="overview"
+              onclick="switchExpTab('overview')">
+        📋 Overview
+      </button>
+      <button class="exp-tab" data-tab="model-details"
+              onclick="switchExpTab('model-details')">
+        🤖 Model Details
+      </button>
+      <button class="exp-tab" data-tab="feature-analysis"
+              onclick="switchExpTab('feature-analysis')">
+        🔬 Feature Analysis
+        <span class="exp-tab-badge" id="exp-badge-features"></span>
+      </button>
+    </div>
+
+    <!-- Tab: Overview -->
+    <div class="exp-tab-content active" id="exp-tab-overview">
+      <div id="exp-overview-body">
+        <p class="exp-placeholder">Run a scan to see the analysis.</p>
+      </div>
+    </div>
+
+    <!-- Tab: Model Details -->
+    <div class="exp-tab-content" id="exp-tab-model-details">
+      <div id="exp-modeldetails-body">
+        <p class="exp-placeholder">No model details yet.</p>
+      </div>
+    </div>
+
+    <!-- Tab: Feature Analysis -->
+    <div class="exp-tab-content" id="exp-tab-feature-analysis">
+      <div id="exp-featureanalysis-body">
+        <p class="exp-placeholder">No feature analysis yet.</p>
+      </div>
+    </div>
+
+  </div><!-- /explanation-card -->
+
+</div><!-- /result-card -->
+
+<!-- ── Scoped styles ── -->
+<style>
+/* ── Accessibility ────────────────────────────────────────── */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Explanation tab bar ──────────────────────────────────── */
+.exp-tab-bar {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin: -4px -4px 20px;
+}
+.exp-tab {
+  position: relative;
+  padding: 10px 18px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color .15s, border-color .15s;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.exp-tab:hover        { color: var(--text); }
+.exp-tab.active       { color: var(--blue); border-bottom-color: var(--blue); }
+
+.exp-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--bg3);
+  color: var(--text-muted);
+}
+
+.exp-tab-content      { display: none; animation: fadeTabIn .2s ease; }
+.exp-tab-content.active { display: block; }
+@keyframes fadeTabIn  { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+.exp-placeholder      { color: var(--text-muted); font-style: italic; font-size: 13px; }
+
+/* ── Overview tab ─────────────────────────────────────────── */
+.exp-risk-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+  border: 1px solid;
+}
+.exp-risk-banner.banner-safe       { background:rgba(74,222,128,.07);  border-color:rgba(74,222,128,.25); }
+.exp-risk-banner.banner-suspicious { background:rgba(251,191,36,.07);  border-color:rgba(251,191,36,.25); }
+.exp-risk-banner.banner-malicious  { background:rgba(248,113,113,.09); border-color:rgba(248,113,113,.30); }
+.exp-risk-banner.banner-unknown    { background:var(--bg3); border-color:var(--border); }
+
+.exp-banner-icon    { font-size: 30px; line-height: 1; flex-shrink: 0; }
+.exp-banner-text h3 { margin: 0 0 4px; font-size: 15px; font-weight: 700; }
+.exp-banner-text p  { margin: 0; font-size: 13px; color: var(--text-muted); line-height: 1.55; }
+
+.exp-section        { margin-bottom: 20px; }
+.exp-section:last-child { margin-bottom: 0; }
+.exp-section-label  { font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+                      color: var(--text-muted); margin-bottom: 8px; font-weight: 600; }
+.exp-narrative-para { font-size: 13px; line-height: 1.8; color: var(--text); margin: 0 0 8px; }
+.exp-narrative-para:last-child { margin-bottom: 0; }
+.exp-divider        { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+.exp-action-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.action-allow       { background:rgba(74,222,128,.12);  color:var(--green); border:1px solid rgba(74,222,128,.3); }
+.action-warn        { background:rgba(251,191,36,.12);  color:var(--amber); border:1px solid rgba(251,191,36,.3); }
+.action-quarantine  { background:rgba(248,113,113,.12); color:var(--red);   border:1px solid rgba(248,113,113,.3); }
+
+/* ── Model Details tab ────────────────────────────────────── */
+.model-compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+@media (max-width: 600px) { .model-compare-grid { grid-template-columns: 1fr; } }
+
+.model-compare-card {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.model-compare-card.card-phishing { border-left: 3px solid var(--red); }
+.model-compare-card.card-legit    { border-left: 3px solid var(--green); }
+.model-compare-card.card-unknown  { border-left: 3px solid var(--border); }
+.model-compare-card.card-trusted  { border-left: 3px solid var(--blue); }
+
+.model-compare-name   { font-size: 11px; color: var(--text-muted); text-transform: uppercase;
+                        letter-spacing: .05em; margin-bottom: 8px; }
+.model-compare-verdict { font-size: 18px; font-weight: 800; margin-bottom: 6px; }
+.model-compare-score  { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; }
+
+.model-mini-bar-track { height: 6px; background: var(--bg2); border-radius: 3px; overflow: hidden; }
+.model-mini-bar-fill  { height: 100%; border-radius: 3px; transition: width .4s ease; }
+
+.model-note-box {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-muted);
+  background: var(--bg2);
+  border-radius: 6px;
+  padding: 9px 12px;
+  margin-top: 8px;
+  border-left: 3px solid var(--border);
+}
+.model-note-box.note-agree    { border-left-color: var(--green); }
+.model-note-box.note-disagree { border-left-color: var(--amber); }
+.model-note-box.note-trusted  { border-left-color: var(--blue); }
+.model-note-box.note-warn     { border-left-color: var(--red); }
+
+.conf-detail-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.conf-detail-chip {
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--bg3);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.conf-detail-chip.chip-high   { background:rgba(74,222,128,.1);  color:var(--green); border-color:rgba(74,222,128,.3); }
+.conf-detail-chip.chip-medium { background:rgba(251,191,36,.1);  color:var(--amber); border-color:rgba(251,191,36,.3); }
+.conf-detail-chip.chip-low    { background:rgba(124,106,247,.1); color:var(--blue);  border-color:rgba(124,106,247,.3); }
+
+/* ── Feature Analysis tab ─────────────────────────────────── */
+.feat-section       { margin-bottom: 18px; }
+.feat-section:last-child { margin-bottom: 0; }
+
+.feat-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.feat-item:last-child { margin-bottom: 0; }
+
+.feat-item-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg3);
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: background .15s;
+}
+.feat-item-header:hover { background: rgba(124,106,247,.07); }
+
+.feat-name-mono { font-family: monospace; font-size: 13px; font-weight: 600;
+                  color: var(--text); flex: 1; }
+.feat-val-tag   { font-size: 11px; color: var(--text-muted); font-family: monospace;
+                  background: var(--bg2); padding: 2px 7px; border-radius: 4px; }
+.feat-dir-pill  { padding: 2px 8px; border-radius: 10px; font-size: 10px;
+                  font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.pill-risk      { background:rgba(248,113,113,.15); color:var(--red); }
+.pill-safe      { background:rgba(74,222,128,.12);  color:var(--green); }
+.feat-contrib   { font-size: 12px; font-weight: 700; min-width: 54px; text-align: right; }
+.feat-chevron   { color: var(--text-muted); font-size: 11px; transition: transform .2s; }
+.feat-chevron.open { transform: rotate(90deg); }
+
+.feat-item-body {
+  display: none;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg2);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+.feat-item-body.open { display: block; }
+
+.feat-no-model {
+  text-align: center;
+  padding: 32px 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+</style>
+
 {% endblock %}
 
 {% block scripts %}

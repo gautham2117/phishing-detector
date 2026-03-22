@@ -2,7 +2,6 @@
 {% block title %}Image Analysis — PhishGuard{% endblock %}
 
 {% block content %}
-<!-- Data island -->
 <div id="page-data"
      data-scan-url="/image/analysis/scan"
      data-history-url="/image/analysis/history"
@@ -15,8 +14,8 @@
     Image Analysis
   </h1>
   <p class="page-subtitle">
-    OCR text extraction · Phishing screenshot detection ·
-    Brand spoofing detection · DistilBERT classifier
+    OCR · Brand spoofing · DistilBERT classifier · QR codes ·
+    Steganography · ELA manipulation · Gemini AI description
   </p>
 </div>
 
@@ -27,7 +26,6 @@
     <span class="card-title">Upload Image for Analysis</span>
   </div>
   <div class="card-body">
-
     <div class="img-drop-zone" id="imgDropZone">
       <div class="img-drop-icon">🖼</div>
       <div class="img-drop-text">
@@ -36,10 +34,10 @@
       </div>
       <div class="img-drop-hint">PNG · JPG · GIF · BMP · WEBP (max 20 MB)</div>
       <input type="file" id="imgFileInput" class="att-file-input"
+             aria-label="Upload image for analysis"
              accept=".png,.jpg,.jpeg,.gif,.bmp,.webp">
     </div>
 
-    <!-- Image preview -->
     <div class="img-preview-wrap" id="imgPreviewWrap" style="display:none">
       <img id="imgPreview" class="img-preview" alt="Preview" src="">
       <div class="img-preview-meta" id="imgPreviewMeta"></div>
@@ -52,26 +50,23 @@
       </button>
       <div class="ai-error" id="imgError" style="display:none"></div>
     </div>
-
   </div>
 </div>
 
 <!-- ── Results ─────────────────────────────────────────────────────────────── -->
 <div id="imgResultsPanel" style="display:none">
 
-  <!-- Verdict + risk -->
+  <!-- Verdict + classifier -->
   <div class="ai-verdict-row" style="margin-bottom:16px">
-
     <div class="card ai-verdict-card">
       <div class="card-body ai-verdict-body">
-        <div class="ai-verdict-badge" id="imgVerdictBadge">—</div>
-        <div class="ai-verdict-prob"  id="imgRiskScore"></div>
-        <div class="ai-verdict-meta"  id="imgDimensions"></div>
+        <div class="ai-verdict-badge"  id="imgVerdictBadge">—</div>
+        <div class="ai-verdict-prob"   id="imgRiskScore"></div>
+        <div class="ai-verdict-meta"   id="imgDimensions"></div>
         <div class="ai-verdict-action" id="imgAction"></div>
       </div>
     </div>
 
-    <!-- Classifier result -->
     <div class="card">
       <div class="card-header">
         <span class="card-icon">🤖</span>
@@ -81,8 +76,7 @@
         <div class="img-clf-label"  id="imgClfLabel">—</div>
         <div class="img-clf-score-wrap">
           <div class="att-entropy-bar-bg">
-            <div class="att-entropy-bar-fill img-clf-bar" id="imgClfBar"
-                 style="width:0%"></div>
+            <div class="att-entropy-bar-fill img-clf-bar" id="imgClfBar" style="width:0%"></div>
           </div>
           <div class="img-clf-score-text" id="imgClfScore">0%</div>
         </div>
@@ -103,10 +97,29 @@
         </div>
       </div>
     </div>
-
   </div>
 
-  <!-- Detected brands -->
+  <!-- ── Gemini AI Description card ─────────────────────────────────────── -->
+  <div class="card" id="geminiCard" style="display:none">
+    <div class="card-header">
+      <span class="card-icon">✨</span>
+      <span class="card-title"
+            data-help="Gemini 1.5 Pro analyses the image and describes what it actually contains — people, objects, text, layout, and any security-relevant observations like login forms or phishing indicators.">
+        AI Image Description
+        <span class="gemini-model-tag">gemini-1.5-pro</span>
+      </span>
+    </div>
+    <div class="card-body">
+      <div id="geminiLoading" style="display:none">
+        <span class="gemini-loading-dot"></span>
+        <span class="gemini-loading-text">Gemini is analysing the image…</span>
+      </div>
+      <div id="geminiError" style="display:none"></div>
+      <p class="gemini-description-text" id="geminiDescriptionText"></p>
+    </div>
+  </div>
+
+  <!-- Brands -->
   <div class="card" id="imgBrandsCard">
     <div class="card-header">
       <span class="card-icon">🏷</span>
@@ -124,7 +137,7 @@
     </div>
   </div>
 
-  <!-- Phishing keywords -->
+  <!-- Keywords -->
   <div class="card" id="imgKwCard">
     <div class="card-header">
       <span class="card-icon">🔍</span>
@@ -134,6 +147,24 @@
     <div class="card-body">
       <div class="att-tag-list" id="imgKwList">
         <span class="att-empty-note">No phishing keywords detected.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── ELA card ─────────────────────────────────────────────────────────── -->
+  <div class="card" id="elaCard" style="display:none">
+    <div class="card-header">
+      <span class="card-icon">🔬</span>
+      <span class="card-title"
+            data-help="Error Level Analysis (ELA) re-saves the image at a fixed JPEG quality and measures pixel-level differences. Regions that compress differently from their surroundings may have been inserted or edited — a common technique in forged phishing screenshots.">
+        Error Level Analysis (ELA)
+      </span>
+      <span class="att-count-badge att-badge-danger" id="elaManipulatedBadge"
+            style="display:none">MANIPULATION SUSPECTED</span>
+    </div>
+    <div class="card-body">
+      <div class="ela-grid" id="elaGrid">
+        <!-- populated by JS -->
       </div>
     </div>
   </div>
@@ -149,20 +180,55 @@
     </div>
   </div>
 
-  <!-- Explanation -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-icon">💬</span>
-      <span class="card-title">Analysis Explanation</span>
+  <!-- ══════════════════════════════════════════════════════════════════════
+       3-Tab Explanation Panel
+       Tabs: Overview | Visual Analysis | Signals & ML
+       All three exp-tab-content divs are INSIDE #imgExpCard.
+       ══════════════════════════════════════════════════════════════════════ -->
+  <div class="card" id="imgExpCard">
+
+    <div class="exp-tab-bar">
+      <button class="exp-tab active" data-tab="img-overview"
+              onclick="switchExpTab('img-overview')">
+        📋 Overview
+      </button>
+      <button class="exp-tab" data-tab="img-visual"
+              onclick="switchExpTab('img-visual')">
+        🖼 Visual Analysis
+      </button>
+      <button class="exp-tab" data-tab="img-signals"
+              onclick="switchExpTab('img-signals')">
+        🔬 Signals &amp; ML
+        <span class="exp-tab-badge" id="expBadgeSignals"></span>
+      </button>
     </div>
-    <div class="card-body">
-      <p class="ai-explanation" id="imgExplanation"></p>
+
+    <!-- Tab 1: Overview -->
+    <div class="exp-tab-content active" id="exp-tab-img-overview">
+      <div id="expOverviewBody">
+        <p class="exp-placeholder">Run a scan to see the analysis.</p>
+      </div>
     </div>
-  </div>
+
+    <!-- Tab 2: Visual Analysis -->
+    <div class="exp-tab-content" id="exp-tab-img-visual">
+      <div id="expVisualBody">
+        <p class="exp-placeholder">No visual analysis yet.</p>
+      </div>
+    </div>
+
+    <!-- Tab 3: Signals & ML -->
+    <div class="exp-tab-content" id="exp-tab-img-signals">
+      <div id="expSignalsBody">
+        <p class="exp-placeholder">No signals yet.</p>
+      </div>
+    </div>
+
+  </div><!-- /imgExpCard -->
 
 </div><!-- /imgResultsPanel -->
 
-<!-- ── History table ───────────────────────────────────────────────────────── -->
+<!-- ── History ──────────────────────────────────────────────────────────────── -->
 <div class="card" style="margin-top:24px">
   <div class="card-header">
     <span class="card-icon">🕐</span>
@@ -174,26 +240,350 @@
       <table class="data-table">
         <thead>
           <tr>
-            <th>ID</th>
-            <th>Filename</th>
-            <th>Dimensions</th>
-            <th>OCR Words</th>
-            <th>Brands</th>
-            <th>Keywords</th>
-            <th>Risk</th>
-            <th>Verdict</th>
-            <th>Scanned</th>
+            <th>ID</th><th>Filename</th><th>Dimensions</th>
+            <th>OCR Words</th><th>Brands</th><th>Keywords</th>
+            <th>Risk</th><th>Verdict</th><th>Scanned</th>
           </tr>
         </thead>
         <tbody id="imgHistoryBody">
-          <tr>
-            <td colspan="9" class="att-empty-row">No scans yet.</td>
-          </tr>
+          <tr><td colspan="9" class="att-empty-row">No scans yet.</td></tr>
         </tbody>
       </table>
     </div>
   </div>
 </div>
+
+<!-- ── Scoped styles ────────────────────────────────────────────────────────── -->
+<style>
+/* ── Drop zone active state (Bug 1 FIX)
+     .img-drop-zone uses .att-drop-active toggled by JS —
+     this class was missing for .img-drop-zone specifically.     ─────────── */
+.img-drop-zone.att-drop-active {
+  border-color: var(--blue) !important;
+  background: rgba(56, 139, 253, 0.06) !important;
+}
+
+/* ── Gemini card ──────────────────────────────────────────────────────── */
+.gemini-model-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 0.70rem;
+  font-weight: 600;
+  background: rgba(124,106,247,0.12);
+  color: var(--blue);
+  border: 1px solid rgba(124,106,247,0.3);
+  vertical-align: middle;
+  text-transform: lowercase;
+}
+.gemini-loading-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--blue);
+  animation: gemiPulse 1s infinite;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+@keyframes gemiPulse {
+  0%,100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: .4; transform: scale(.7); }
+}
+.gemini-loading-text {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+.gemini-description-text {
+  font-size: 0.88rem;
+  line-height: 1.75;
+  color: var(--text);
+  margin: 0;
+  white-space: pre-wrap;
+}
+#geminiError {
+  font-size: 0.82rem;
+  color: var(--amber);
+  background: rgba(251,191,36,0.07);
+  border: 1px solid rgba(251,191,36,0.25);
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+/* ── ELA card ─────────────────────────────────────────────────────────── */
+.ela-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 640px) { .ela-grid { grid-template-columns: 1fr; } }
+.ela-image-wrap {
+  background: var(--bg3);
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.ela-image-wrap img {
+  width: 100%;
+  display: block;
+  image-rendering: pixelated;
+}
+.ela-image-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  padding: 6px 10px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+}
+.ela-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.ela-stat-box {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.ela-stat-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: 4px;
+}
+.ela-stat-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text);
+  font-family: monospace;
+}
+.ela-verdict-box {
+  grid-column: 1 / -1;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  border: 1px solid;
+}
+.ela-verdict-box.manipulated {
+  background: rgba(248,113,113,0.07);
+  border-color: rgba(248,113,113,0.3);
+  color: #fca5a5;
+}
+.ela-verdict-box.clean {
+  background: rgba(74,222,128,0.07);
+  border-color: rgba(74,222,128,0.25);
+  color: #86efac;
+}
+.ela-not-applicable {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Explanation tab bar ──────────────────────────────────────────────── */
+.exp-tab-bar {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin: -4px -4px 20px;
+}
+.exp-tab {
+  position: relative;
+  padding: 10px 18px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color .15s, border-color .15s;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.exp-tab:hover  { color: var(--text); }
+.exp-tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+.exp-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--bg3);
+  color: var(--text-muted);
+}
+
+/* ── Bug 3 FIX: exp-tab-content needs padding so content doesn't
+     render flush against the card edges.
+     Both display states are set — active gets block + padding.     ────── */
+.exp-tab-content {
+  display: none;
+  animation: fadeTabIn .2s ease;
+}
+.exp-tab-content.active {
+  display: block;
+  padding: 4px 4px 8px;   /* ← was missing — content was flush to card edge */
+}
+@keyframes fadeTabIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+.exp-placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 13px;
+}
+
+/* ── Shared exp section ───────────────────────────────────────────────── */
+.exp-section       { margin-bottom: 18px; }
+.exp-section:last-child { margin-bottom: 0; }
+.exp-section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.exp-narrative-para {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+.exp-risk-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+  border: 1px solid;
+}
+.exp-risk-banner.banner-clean      { background:rgba(74,222,128,.07);  border-color:rgba(74,222,128,.25); }
+.exp-risk-banner.banner-suspicious { background:rgba(251,191,36,.07);  border-color:rgba(251,191,36,.25); }
+.exp-risk-banner.banner-malicious  { background:rgba(248,113,113,.09); border-color:rgba(248,113,113,.30); }
+.exp-banner-icon { font-size: 28px; line-height: 1; flex-shrink: 0; }
+.exp-banner-text h3 { margin: 0 0 4px; font-size: 15px; font-weight: 700; }
+.exp-banner-text p  { margin: 0; font-size: 13px; color: var(--text-muted); line-height: 1.55; }
+.exp-action-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.action-allow      { background:rgba(74,222,128,.12);  color:var(--green); border:1px solid rgba(74,222,128,.3); }
+.action-warn       { background:rgba(251,191,36,.12);  color:var(--amber); border:1px solid rgba(251,191,36,.3); }
+.action-quarantine { background:rgba(248,113,113,.12); color:var(--red);   border:1px solid rgba(248,113,113,.3); }
+
+/* ── Visual analysis tab ─────────────────────────────────────────────── */
+.img-gemini-inline {
+  background: var(--bg3);
+  border: 1px solid rgba(124,106,247,0.2);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.img-gemini-inline-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--blue);
+  margin-bottom: 8px;
+}
+.img-gemini-inline-text {
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--text);
+  margin: 0;
+  white-space: pre-wrap;
+}
+.img-ela-inline-wrap {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.img-ela-inline-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+.img-ela-inline-img {
+  width: 100%;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  image-rendering: pixelated;
+  margin-bottom: 10px;
+}
+
+/* ── Signals & ML tab ────────────────────────────────────────────────── */
+.sig-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.sig-card:last-child { margin-bottom: 0; }
+.sig-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg3);
+}
+.sig-card-title  { font-size: 13px; font-weight: 600; color: var(--text); flex: 1; }
+.sig-card-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.sig-badge-ok    { background:rgba(74,222,128,.12);  color:var(--green); }
+.sig-badge-warn  { background:rgba(251,191,36,.12);  color:var(--amber); }
+.sig-badge-danger{ background:rgba(248,113,113,.12); color:var(--red);   }
+.sig-card-body {
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+}
+.sig-tag-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.sig-tag {
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 11px;
+  background: var(--bg3);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.sig-tag.danger { background:rgba(248,113,113,.1); color:var(--red);   border-color:rgba(248,113,113,.3); }
+.sig-tag.warn   { background:rgba(251,191,36,.1);  color:var(--amber); border-color:rgba(251,191,36,.3); }
+</style>
+
 {% endblock %}
 
 {% block scripts %}

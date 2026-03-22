@@ -1,12 +1,26 @@
 # email_parser.py
 # Core email parsing engine — Phase 1.
 # Handles .eml bytes, raw text strings, and file paths.
+#
+# NEW IN THIS VERSION:
+#   Feature A — DNSBL/RBL Real-Time Blocklist Check
+#     _check_sender_ip_dnsbl(ip) queries 5 blocklist zones via dnspython,
+#     caches results for 5 minutes, returns listed/zones_hit/zones_checked/ip.
+#     Sender IP extracted from the first Received header via regex.
+#     Result exposed as dnsbl_result in parse_email() return dict.
+#
+#   Feature B — BEC Display Name Spoofing Detector
+#     _detect_bec_spoofing(sender, headers_dict) checks for executive
+#     keywords in the display name, domain mismatches, and Reply-To
+#     domain divergence. Result exposed as bec_result in parse_email()
+#     return dict.
 
 import re
 import json
 import email
 import logging
 import hashlib
+import time
 from email import policy
 from email.message import EmailMessage
 from typing import Optional
@@ -18,12 +32,28 @@ from backend.ml.model_loader import get_model
 
 logger = logging.getLogger(__name__)
 
+# ── Optional dnspython import ─────────────────────────────────────────────────
+try:
+    import dns.resolver
+    DNS_AVAILABLE = True
+except ImportError:
+    DNS_AVAILABLE = False
+    logger.warning(
+        "dnspython not installed — DNSBL checking disabled. "
+        "Run: pip install dnspython"
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Compiled regex patterns
 # ─────────────────────────────────────────────────────────────────────────────
 
 URL_PATTERN    = re.compile(r'https?://[^\s<>"\')\]]+', re.IGNORECASE)
 IP_URL_PATTERN = re.compile(r'https?://(\d{1,3}\.){3}\d{1,3}')
+
+# Extracts the first IPv4 address found inside square brackets in a
+# Received header — the standard format is "from host [1.2.3.4]"
+_RECEIVED_IP_RE = re.compile(r'\[(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\]')
 
 URL_SHORTENERS = {
     "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly",
@@ -50,6 +80,26 @@ URGENCY_KEYWORDS = [
     "we detected", "important notice", "final notice", "last chance"
 ]
 
+# BEC: executive title keywords that make a display name suspicious
+_BEC_EXECUTIVE_KEYWORDS = [
+    "ceo", "cfo", "cto", "coo", "ciso",
+    "president", "director", "manager", "vp ", "v.p.",
+    "head of", "chief", "vice president", "executive",
+]
+
+# DNSBL zones to query
+_DNSBL_ZONES = [
+    "zen.spamhaus.org",
+    "bl.spamcop.net",
+    "dnsbl.sorbs.net",
+    "b.barracudacentral.org",
+    "dnsbl-1.uceprotect.net",
+]
+
+# Module-level cache: ip → {"result": dict, "expires": float}
+_DNSBL_CACHE: dict = {}
+_DNSBL_CACHE_TTL   = 300   # 5 minutes
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main parsing function
@@ -63,29 +113,44 @@ def parse_email(source) -> dict:
         source: bytes (.eml content) or str (raw email text or file path)
 
     Returns:
-        Structured dict with all parsed fields.
+        Structured dict with all parsed fields, including:
+          dnsbl_result  — real-time sender IP blocklist check
+          bec_result    — business email compromise display-name spoof check
     """
     msg = _parse_raw(source)
     if msg is None:
         return _error_result("Failed to parse email input")
 
     # Extract headers
-    sender    = _clean_header(msg.get("From",     ""))
-    recipient = _clean_header(msg.get("To",       ""))
-    reply_to  = _clean_header(msg.get("Reply-To", ""))
-    subject   = _clean_header(msg.get("Subject",  ""))
-    date_raw  = _clean_header(msg.get("Date",     ""))
+    sender     = _clean_header(msg.get("From",     ""))
+    recipient  = _clean_header(msg.get("To",       ""))
+    reply_to   = _clean_header(msg.get("Reply-To", ""))
+    subject    = _clean_header(msg.get("Subject",  ""))
+    date_raw   = _clean_header(msg.get("Date",     ""))
     message_id = _clean_header(msg.get("Message-ID", ""))
 
     headers_dict = _extract_all_headers(msg)
     auth_results = _extract_auth_results(headers_dict)
     body_text, body_html = _extract_body(msg)
-    urls         = _extract_urls(body_text, body_html)
-    attachments  = _extract_attachments(msg)
-    anomalies    = _detect_anomalies(sender, reply_to, headers_dict, urls)
+    urls        = _extract_urls(body_text, body_html)
+    attachments = _extract_attachments(msg)
+    anomalies   = _detect_anomalies(sender, reply_to, headers_dict, urls)
 
-    classify_text = body_text.strip() if body_text.strip() else _strip_html(body_html)
+    classify_text     = body_text.strip() if body_text.strip() else _strip_html(body_html)
     distilbert_result = _classify_with_distilbert(classify_text)
+
+    # ── Feature A: DNSBL sender IP check ─────────────────────────────────────
+    sender_ip    = _extract_sender_ip(headers_dict)
+    dnsbl_result = _check_sender_ip_dnsbl(sender_ip) if sender_ip else {
+        "listed":         False,
+        "zones_hit":      [],
+        "zones_checked":  0,
+        "ip":             None,
+        "note":           "No sender IP found in Received headers",
+    }
+
+    # ── Feature B: BEC display name spoofing check ────────────────────────────
+    bec_result = _detect_bec_spoofing(sender, headers_dict)
 
     return {
         "sender":            sender,
@@ -102,8 +167,258 @@ def parse_email(source) -> dict:
         "auth_results":      auth_results,
         "anomalies":         anomalies,
         "distilbert_result": distilbert_result,
+        "dnsbl_result":      dnsbl_result,   # ← Feature A
+        "bec_result":        bec_result,     # ← Feature B
         "parsed_at":         datetime.utcnow().isoformat() + "Z"
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Feature A: DNSBL / RBL real-time blocklist check
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_sender_ip(headers_dict: dict) -> Optional[str]:
+    """
+    Extract the first public IPv4 address from the Received header chain.
+    Received headers are in reverse-chronological order; the last hop
+    (first header) is the originating MTA — that is the IP we care about.
+    """
+    received = headers_dict.get("Received", [])
+    if isinstance(received, str):
+        received = [received]
+
+    for header_val in received:
+        match = _RECEIVED_IP_RE.search(header_val)
+        if match:
+            ip = match.group(1)
+            # Skip RFC-1918 private / loopback addresses
+            if not _is_private_ip(ip):
+                return ip
+    return None
+
+
+def _is_private_ip(ip: str) -> bool:
+    """Return True for loopback, private, and link-local IPv4 addresses."""
+    try:
+        parts = [int(p) for p in ip.split(".")]
+        if len(parts) != 4:
+            return True
+        # 127.x.x.x loopback
+        if parts[0] == 127:
+            return True
+        # 10.x.x.x
+        if parts[0] == 10:
+            return True
+        # 172.16-31.x.x
+        if parts[0] == 172 and 16 <= parts[1] <= 31:
+            return True
+        # 192.168.x.x
+        if parts[0] == 192 and parts[1] == 168:
+            return True
+        # 169.254.x.x link-local
+        if parts[0] == 169 and parts[1] == 254:
+            return True
+        return False
+    except Exception:
+        return True
+
+
+def _check_sender_ip_dnsbl(ip: str) -> dict:
+    """
+    Query 5 DNSBL zones for the given IPv4 address.
+
+    Each query reverses the IP octets and prepends to the zone name,
+    then performs an A-record lookup. A successful resolution means the
+    IP is listed on that blocklist.
+
+    Results are cached for 5 minutes per IP to avoid hammering DNS.
+
+    Returns:
+        {
+            "listed":        bool,   True if any zone returned a hit
+            "zones_hit":     list,   zone names that listed this IP
+            "zones_checked": int,    how many zones were queried
+            "ip":            str,
+        }
+    """
+    # Check cache
+    now    = time.monotonic()
+    cached = _DNSBL_CACHE.get(ip)
+    if cached and cached["expires"] > now:
+        return cached["result"]
+
+    result: dict = {
+        "listed":        False,
+        "zones_hit":     [],
+        "zones_checked": 0,
+        "ip":            ip,
+    }
+
+    if not DNS_AVAILABLE:
+        result["note"] = (
+            "dnspython not installed — install with: pip install dnspython"
+        )
+        return result
+
+    # Reverse IP octets for DNSBL lookup: "1.2.3.4" → "4.3.2.1"
+    reversed_ip = ".".join(reversed(ip.split(".")))
+
+    zones_checked = 0
+    zones_hit     = []
+
+    for zone in _DNSBL_ZONES:
+        lookup_host = f"{reversed_ip}.{zone}"
+        try:
+            dns.resolver.resolve(lookup_host, "A")
+            # If resolve() does not raise, the IP is listed
+            zones_hit.append(zone)
+            zones_checked += 1
+        except dns.resolver.NXDOMAIN:
+            # Not listed on this zone — expected happy path
+            zones_checked += 1
+        except dns.resolver.NoAnswer:
+            zones_checked += 1
+        except dns.resolver.Timeout:
+            # Don't count timed-out zones as checked
+            logger.debug("DNSBL timeout for %s @ %s", ip, zone)
+        except Exception as e:
+            logger.debug("DNSBL lookup error %s @ %s: %s", ip, zone, e)
+
+    result["listed"]        = len(zones_hit) > 0
+    result["zones_hit"]     = zones_hit
+    result["zones_checked"] = zones_checked
+
+    # Store in cache
+    _DNSBL_CACHE[ip] = {"result": result, "expires": now + _DNSBL_CACHE_TTL}
+
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Feature B: BEC display name spoofing detector
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _detect_bec_spoofing(sender: str, headers_dict: dict) -> dict:
+    """
+    Detect Business Email Compromise (BEC) display name spoofing.
+
+    Checks:
+      1. Does the From display name contain an executive keyword
+         (CEO, CFO, Director, Manager, etc.)?
+      2. Does the Reply-To domain differ from the From domain?
+      3. Does the display name imply a well-known org that doesn't
+         match the actual sending domain?
+
+    Returns:
+        {
+            "is_bec_suspect":         bool,
+            "display_name":           str,
+            "from_domain":            str,
+            "reply_to_domain":        str | None,
+            "executive_keyword_found":str,   empty string if none
+            "risk_signals":           list[str],
+        }
+    """
+    result = {
+        "is_bec_suspect":          False,
+        "display_name":            "",
+        "from_domain":             "",
+        "reply_to_domain":         None,
+        "executive_keyword_found": "",
+        "risk_signals":            [],
+    }
+
+    if not sender:
+        return result
+
+    # ── Parse display name and email address from From header ─────────────────
+    # Formats: "John Smith <john@domain.com>" or "john@domain.com"
+    display_name = ""
+    from_addr    = sender.strip()
+
+    angle_match = re.match(r'^"?([^"<]*)"?\s*<([^>]+)>', sender)
+    if angle_match:
+        display_name = angle_match.group(1).strip().strip('"')
+        from_addr    = angle_match.group(2).strip()
+    else:
+        # No angle brackets — the whole thing is just the address
+        display_name = ""
+        from_addr    = sender.strip()
+
+    result["display_name"] = display_name
+
+    from_domain = _extract_domain_from_addr(from_addr) or ""
+    result["from_domain"] = from_domain
+
+    # ── Reply-To domain ───────────────────────────────────────────────────────
+    reply_to_raw = headers_dict.get("Reply-To", "")
+    if isinstance(reply_to_raw, list):
+        reply_to_raw = reply_to_raw[0] if reply_to_raw else ""
+    reply_to_domain = _extract_domain_from_addr(reply_to_raw) if reply_to_raw else None
+    result["reply_to_domain"] = reply_to_domain
+
+    risk_signals = []
+
+    # ── Check 1: executive keyword in display name ────────────────────────────
+    display_lower         = display_name.lower()
+    executive_kw_found    = ""
+    for kw in _BEC_EXECUTIVE_KEYWORDS:
+        if kw in display_lower:
+            executive_kw_found = kw.strip()
+            break
+
+    result["executive_keyword_found"] = executive_kw_found
+
+    if executive_kw_found:
+        risk_signals.append(
+            f"Display name contains executive keyword: \"{executive_kw_found}\""
+        )
+
+    # ── Check 2: Reply-To domain differs from From domain ─────────────────────
+    if reply_to_domain and from_domain and reply_to_domain != from_domain:
+        risk_signals.append(
+            f"Reply-To domain ({reply_to_domain}) differs from "
+            f"From domain ({from_domain})"
+        )
+
+    # ── Check 3: display name implies a known brand but domain doesn't match ──
+    # e.g. display name "Microsoft Support" but sending from gmail.com
+    _known_orgs = [
+        ("microsoft", "microsoft.com"),
+        ("google",    "google.com"),
+        ("apple",     "apple.com"),
+        ("amazon",    "amazon.com"),
+        ("paypal",    "paypal.com"),
+        ("facebook",  "facebook.com"),
+        ("meta",      "meta.com"),
+        ("linkedin",  "linkedin.com"),
+        ("netflix",   "netflix.com"),
+        ("dropbox",   "dropbox.com"),
+    ]
+    for org_name, org_domain in _known_orgs:
+        if org_name in display_lower:
+            # The display name mentions this brand — does the sending
+            # domain actually belong to it?
+            if from_domain and not (
+                from_domain == org_domain or
+                from_domain.endswith("." + org_domain)
+            ):
+                risk_signals.append(
+                    f"Display name implies \"{org_name}\" "
+                    f"but email originates from {from_domain}"
+                )
+            break   # Only flag the first brand match to avoid noise
+
+    # ── Combine signals into final verdict ────────────────────────────────────
+    # Require at least one signal AND at least one of the stronger checks
+    # (executive keyword OR reply-to mismatch) to flag as BEC suspect.
+    has_strong_signal = bool(executive_kw_found) or (
+        reply_to_domain and from_domain and reply_to_domain != from_domain
+    )
+    result["is_bec_suspect"] = len(risk_signals) > 0 and has_strong_signal
+    result["risk_signals"]   = risk_signals
+
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -496,6 +811,21 @@ def _error_result(message: str) -> dict:
         }],
         "distilbert_result": {
             "label": "UNKNOWN", "score": 0.0, "model": "none"
+        },
+        "dnsbl_result": {                       # ← Feature A fallback
+            "listed":        False,
+            "zones_hit":     [],
+            "zones_checked": 0,
+            "ip":            None,
+            "note":          message,
+        },
+        "bec_result": {                         # ← Feature B fallback
+            "is_bec_suspect":          False,
+            "display_name":            "",
+            "from_domain":             "",
+            "reply_to_domain":         None,
+            "executive_keyword_found": "",
+            "risk_signals":            [],
         },
         "parsed_at": datetime.utcnow().isoformat() + "Z",
         "error":     message

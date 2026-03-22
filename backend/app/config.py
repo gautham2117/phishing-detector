@@ -22,6 +22,7 @@ load_dotenv(os.path.join(_project_root, ".env"))
 # Build the absolute path to the database folder and file
 _database_dir  = os.path.join(_project_root, "database")
 _database_file = os.path.join(_database_dir, "phishing_detector.db")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # Create the database/ directory right now if it doesn't exist.
 # This is the key fix — SQLite cannot create the file if the
