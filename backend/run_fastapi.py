@@ -2,7 +2,6 @@
 from dotenv import load_dotenv
 load_dotenv()
 import os
-os.environ["GEMINI_API_KEY"] = "AIzaSyAtGnuMQStvmR1jVrami4T95eWCt0qYeBk"
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
