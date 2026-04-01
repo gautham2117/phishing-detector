@@ -20,7 +20,7 @@ lxml==5.2.2
 # URL / domain intelligence
 python-whois==0.9.4
 dnspython==2.6.1
-requests==2.32.3
+requests==2.33.0
 urllib3==2.2.2
 
 # Network scanning
