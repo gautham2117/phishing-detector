@@ -2,7 +2,7 @@
 flask==3.0.3
 fastapi==0.111.0
 uvicorn==0.30.1
-python-multipart==0.0.9
+python-multipart==0.0.22
 
 # Database
 sqlalchemy==2.0.30
